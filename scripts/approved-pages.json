@@ -1,0 +1,8 @@
+[
+  { "url": "/sundays", "depth": "deep" },
+  { "url": "/community", "depth": "shallow" },
+  { "url": "/serve", "depth": "deep" },
+  { "url": "/giving", "depth": "deep" },
+  { "url": "/ministries", "depth": "deep" },
+  { "url": "/events", "depth": "deep" }
+]
