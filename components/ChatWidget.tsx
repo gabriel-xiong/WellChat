@@ -1,0 +1,214 @@
+"use client";
+
+import { FormEvent, KeyboardEvent, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+
+type Source = {
+  title: string;
+  url: string;
+};
+
+type ChatResponse = {
+  answer: string;
+  sources: Source[];
+  fallback_triggered: boolean;
+};
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: Source[];
+  fallbackTriggered?: boolean;
+};
+
+const starterMessage: Message = {
+  id: "welcome",
+  role: "assistant",
+  content: "Hi! I'm here to help answer your questions about The Well. What would you like to know?",
+  sources: [],
+};
+
+export default function ChatWidget() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([starterMessage]);
+  const [question, setQuestion] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  async function sendQuestion() {
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion || isLoading) return;
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: trimmedQuestion,
+    };
+
+    setMessages((currentMessages) => [...currentMessages, userMessage]);
+    setQuestion("");
+    setError("");
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: trimmedQuestion }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Request failed");
+      }
+
+      const payload = await response.json() as ChatResponse;
+      const assistantMessage: Message = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        content: payload.answer,
+        sources: payload.sources,
+        fallbackTriggered: payload.fallback_triggered,
+      };
+
+      setMessages((currentMessages) => [...currentMessages, assistantMessage]);
+    } catch {
+      setError("We could not send that message. Please try again.");
+    } finally {
+      setIsLoading(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void sendQuestion();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendQuestion();
+    }
+  }
+
+  return (
+    <div className="fixed inset-x-4 bottom-4 z-50 flex flex-col items-end gap-3 sm:inset-x-auto sm:right-6 sm:bottom-6">
+      {isOpen ? (
+        <section
+          aria-label="The Well chat assistant"
+          className="flex h-[min(680px,calc(100vh-2rem))] w-full flex-col overflow-hidden rounded-[1.35rem] border border-[#cfe5df] bg-[#fbfdfb] shadow-[0_24px_70px_rgba(11,64,58,0.2)] sm:w-[410px]"
+        >
+          <header className="flex items-center justify-between gap-4 border-b border-[#d9ebe6] bg-[#f3faf7] px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-full bg-[#00B5A3] text-sm font-semibold text-white">
+                TW
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-[0.01em] text-[#123f39]">
+                  The Well Assistant
+                </h2>
+                <p className="text-xs text-[#53746d]">Website answers with sources</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="flex size-9 items-center justify-center rounded-full text-xl leading-none text-[#2c5d55] transition hover:bg-[#dff2ed] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
+              aria-label="Close chat"
+            >
+              x
+            </button>
+          </header>
+
+          <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <article
+                  className={`max-w-[86%] rounded-[1.1rem] px-4 py-3 text-sm leading-6 ${
+                    message.role === "user"
+                      ? "bg-[#00B5A3] text-white"
+                      : "border border-[#d9ebe6] bg-white text-[#193f3a]"
+                  }`}
+                >
+                  {message.role === "assistant" ? (
+                    <ReactMarkdown
+                      components={{
+                        a: ({ children, href }) => (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-[#007f73] underline decoration-[#9fdad2] underline-offset-4 hover:text-[#005f57]"
+                          >
+                            {children}
+                          </a>
+                        ),
+                        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  ) : (
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  )}
+                </article>
+              </div>
+            ))}
+
+            {isLoading ? (
+              <div className="flex justify-start">
+                <div className="rounded-[1.1rem] border border-[#d9ebe6] bg-white px-4 py-3 text-sm text-[#53746d]">
+                  Checking our website content...
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <form onSubmit={handleSubmit} className="border-t border-[#d9ebe6] bg-white p-3">
+            {error ? (
+              <p className="mb-2 rounded-xl bg-[#fff3ed] px-3 py-2 text-xs font-medium text-[#8a3d1e]">
+                {error}
+              </p>
+            ) : null}
+            <div className="flex items-end gap-2">
+              <textarea
+                ref={inputRef}
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                placeholder="Ask about Sundays, serving, giving..."
+                className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-[#cfe5df] bg-[#fbfdfb] px-4 py-3 text-sm leading-5 text-[#173f39] outline-none transition placeholder:text-[#7d9a94] focus:border-[#00B5A3] focus:ring-2 focus:ring-[#b8eee7]"
+              />
+              <button
+                type="submit"
+                disabled={!question.trim() || isLoading}
+                className="flex h-11 shrink-0 items-center justify-center rounded-2xl bg-[#00B5A3] px-4 text-sm font-semibold text-white transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#9bcfca]"
+              >
+                Send
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="flex h-14 items-center gap-3 rounded-full bg-[#00B5A3] px-5 text-sm font-semibold text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
+        aria-expanded={isOpen}
+        aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
+      >
+        <span className="flex size-7 items-center justify-center rounded-full bg-white/20 text-base">
+          ?
+        </span>
+        {isOpen ? "Close" : "Ask The Well"}
+      </button>
+    </div>
+  );
+}

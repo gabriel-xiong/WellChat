@@ -4,5 +4,9 @@
   { "url": "/serve", "depth": "deep" },
   { "url": "/giving", "depth": "deep" },
   { "url": "/ministries", "depth": "deep" },
-  { "url": "/events", "depth": "deep" }
+  { "url": "/events", "depth": "deep" },
+  { "url": "/beliefs", "depth": "deep" }, 
+  { "url": "/team", "depth": "shallow" },
+  { "url": "/sermons", "depth": "shallow" },
+  { "url": "/resources", "depth": "deep" }
 ]

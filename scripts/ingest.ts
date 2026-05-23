@@ -80,14 +80,42 @@ function decodeHtmlEntities(text: string): string {
 }
 
 function htmlToText(html: string): string {
-  const withoutScripts = html.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+  const normalizePlainText = (text: string): string => {
+    const headingBreakToken = '___HEADING_BREAK___';
+    return normalizeWhitespace(text.replace(/\n+(?=\s*# )/g, ` ${headingBreakToken} `))
+      .replaceAll(headingBreakToken, '\n');
+  };
+  const lowerHtml = html.toLowerCase();
+  const mainStart = lowerHtml.indexOf('<main');
+  const mainOpenEnd = mainStart >= 0 ? html.indexOf('>', mainStart) : -1;
+  const mainEnd = lowerHtml.lastIndexOf('</main>');
+  const contentHtml = mainStart >= 0 && mainOpenEnd >= 0 && mainEnd > mainOpenEnd
+    ? html.slice(mainOpenEnd + 1, mainEnd)
+    : html
+      .replace(/<nav[\s\S]*<\/nav>/gi, ' ')
+      .replace(/<header[\s\S]*<\/header>/gi, ' ')
+      .replace(/<footer[\s\S]*<\/footer>/gi, ' ');
+  const withoutScripts = contentHtml.replace(/<script[\s\S]*?<\/script>/gi, ' ');
   const withoutStyles = withoutScripts.replace(/<style[\s\S]*?<\/style>/gi, ' ');
   const withHeadingMarkers = withoutStyles.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, content) => {
     const heading = normalizeWhitespace(decodeHtmlEntities(content));
     return `\n\n# ${heading}\n\n`;
   });
   const textOnly = withHeadingMarkers.replace(/<[^>]+>/g, ' ');
-  return normalizeWhitespace(decodeHtmlEntities(textOnly));
+  const plainText = normalizePlainText(decodeHtmlEntities(textOnly));
+  const skipToContentIndex = plainText.slice(0, 3000).toLowerCase().indexOf('skip to content');
+  const contentWithoutSkipLink = skipToContentIndex >= 0
+    ? plainText.slice(skipToContentIndex + 'skip to content'.length).trim()
+    : plainText;
+  const cleanedText = contentWithoutSkipLink
+    .replaceAll('Watch Video', ' ')
+    .replaceAll('Learn More', ' ')
+    .replaceAll('Register', ' ')
+    .replaceAll('Copy to clipboard', ' ')
+    .replaceAll('" />', ' ')
+    .replaceAll('→', ' ')
+    .replace(/\s\+\s/g, ' ');
+  return normalizePlainText(cleanedText).replaceAll(' # ', '\n# ');
 }
 
 function extractTitle(html: string): string {
@@ -110,9 +138,30 @@ function splitByHeadings(text: string): Array<{ section: string; content: string
     const firstLineEnd = part.indexOf('\n');
     const firstLine = firstLineEnd >= 0 ? part.slice(0, firstLineEnd) : part;
     const section = firstLine.replace(/^#\s*/, '').trim() || 'page';
-    const content = firstLineEnd >= 0 ? part.slice(firstLineEnd + 1).trim() : '';
-    return { section, content: content || section };
+    let content = firstLineEnd >= 0 ? part.slice(firstLineEnd + 1).trim() : '';
+    if (content.toLowerCase().startsWith(section.toLowerCase())) {
+      content = content.slice(section.length).trim();
+    }
+    return { section, content };
   });
+}
+
+function mergeShortSections(sections: Array<{ section: string; content: string }>): Array<{ section: string; content: string }> {
+  const merged: Array<{ section: string; content: string }> = [];
+
+  for (let index = 0; index < sections.length; index += 1) {
+    const current = { ...sections[index] };
+
+    while (current.content.length < 300 && index + 1 < sections.length) {
+      index += 1;
+      const next = sections[index];
+      current.content = `${current.content}\n\n${next.section}\n\n${next.content}`.trim();
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
 }
 
 function chunkLongText(section: { section: string; content: string }, maxLength = 1800): Array<{ section: string; content: string }> {
@@ -138,7 +187,7 @@ function chunkLongText(section: { section: string; content: string }, maxLength 
 }
 
 function buildChunks(url: string, title: string, depth: Depth, text: string): PageChunk[] {
-  const sectioned = splitByHeadings(text);
+  const sectioned = mergeShortSections(splitByHeadings(text));
   const chunks: PageChunk[] = [];
 
   for (const section of sectioned) {
@@ -155,7 +204,39 @@ function buildChunks(url: string, title: string, depth: Depth, text: string): Pa
     }
   }
 
-  return chunks.length ? chunks : [{ url, title, section: 'page', content: text, depth, content_type: 'page' }];
+  const filteredChunks = chunks.filter((chunk) => chunk.content.trim().length >= 20);
+  return filteredChunks.length ? filteredChunks : [{ url, title, section: 'page', content: text, depth, content_type: 'page' }];
+}
+
+function summaryForUrl(url: string): string | undefined {
+  if (url.includes('/sundays')) return 'Sunday gathering times, service times, worship service schedule, what time does church start, weekly meeting times, location, address, where is The Well located at The Well Austin: 9am and 11am at Eastside Early College High School, 903 Neal Street, Austin TX.';
+  if (url.includes('/giving')) return 'This page contains information about how to give and donate to The Well Austin.';
+  if (url.includes('/serve')) return 'This page contains information about volunteer teams and how to sign up to serve and volunteer at The Well Austin.';
+  if (url.includes('/community')) return 'This page contains information about community groups across Austin at The Well Austin.';
+  if (url.includes('/ministries')) return 'This page contains information about ministries including kids ministry at The Well Austin.';
+  if (url.includes('/beliefs')) return 'This page contains information about what The Well Austin believes doctrinally.';
+  if (url.includes('/events')) return 'This page contains information about upcoming events at The Well Austin.';
+  if (url.includes('/team')) return 'This page contains information about The Well Austin staff and team members.';
+  return undefined;
+}
+
+function formatEventListings(text: string): string {
+  const monthPattern = 'Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec';
+  const cleanedText = text.replace(new RegExp(`\\b(${monthPattern})\\s+\\.\\s+(\\d{1,2})\\b`, 'g'), '$1 $2');
+  const datePattern = new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:\\s+[—-]\\s+(${monthPattern})\\s+(\\d{1,2}))?\\b`, 'g');
+  const matches = Array.from(cleanedText.matchAll(datePattern));
+
+  if (!matches.length) return cleanedText;
+
+  const eventLines = matches.map((match, index) => {
+    const nextMatch = matches[index + 1];
+    const eventName = cleanedText.slice(match.index! + match[0].length, nextMatch?.index ?? cleanedText.length).trim();
+    const startDate = `${match[1]} ${Number(match[2])}`;
+    const endDate = match[3] && match[4] ? ` - ${match[3]} ${Number(match[4])}` : '';
+    return eventName ? `- ${eventName}: ${startDate}${endDate}` : '';
+  }).filter(Boolean);
+
+  return eventLines.length ? eventLines.join('\n') : cleanedText;
 }
 
 async function fetchPage(url: string): Promise<string> {
@@ -237,8 +318,12 @@ async function ingestPage(page: ApprovedPageConfig): Promise<void> {
 
   const html = await fetchPage(resolvedUrl);
   const title = extractTitle(html);
-  const plainText = htmlToText(html);
-  const rawChunks = buildChunks(resolvedUrl, title, page.depth, plainText);
+  const plainText = resolvedUrl.includes('/events') ? formatEventListings(htmlToText(html)) : htmlToText(html);
+  const summary = summaryForUrl(resolvedUrl);
+  const rawChunks = buildChunks(resolvedUrl, title, page.depth, plainText).map((chunk) => ({
+    ...chunk,
+    content: summary ? `${summary}\n\n${chunk.content}` : chunk.content,
+  }));
 
   const texts = rawChunks.map((chunk) => `${chunk.section}\n\n${chunk.content}`);
   const embeddings = await embedTexts(texts);
