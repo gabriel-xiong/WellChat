@@ -217,6 +217,13 @@ function summaryForUrl(url: string): string | undefined {
   if (url.includes('/beliefs')) return 'This page contains information about what The Well Austin believes doctrinally.';
   if (url.includes('/events')) return 'This page contains information about upcoming events at The Well Austin.';
   if (url.includes('/team')) return 'This page contains information about The Well Austin staff and team members.';
+  if (url.includes('/mission')) return 'This page describes the mission, vision, and values of The Well Austin Community Church.';
+  if (url.includes('/stories')) return 'This page contains stories and testimonies from members of The Well Austin Community Church.';
+  if (url.includes('/podcast')) return 'This page contains information about the Well Said podcast by The Well Austin Community Church.';
+  if (url.includes('/planting')) return 'This page contains information about the National Church Planting Residency at The Well Austin.';
+  if (url.includes('/missions')) return 'This page contains information about international missions and mission trips at The Well Austin.';
+  if (url.includes('/residency')) return 'This page contains information about the Ministry Residency Program at The Well Austin.';
+  if (url.includes('/impact')) return 'This page contains impact reports and updates about The Well Austin Community Church.';
   return undefined;
 }
 

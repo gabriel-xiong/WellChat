@@ -8,5 +8,12 @@
   { "url": "/beliefs", "depth": "deep" }, 
   { "url": "/team", "depth": "shallow" },
   { "url": "/sermons", "depth": "shallow" },
-  { "url": "/resources", "depth": "deep" }
+  { "url": "/resources", "depth": "deep" },
+  { "url": "/mission", "depth": "deep" },
+  { "url": "/stories", "depth": "shallow" },
+  { "url": "/podcast", "depth": "shallow" },
+  { "url": "/planting", "depth": "deep" },
+  { "url": "/missions", "depth": "deep" },
+  { "url": "/residency", "depth": "deep" },
+  { "url": "/impact", "depth": "deep" }
 ]
