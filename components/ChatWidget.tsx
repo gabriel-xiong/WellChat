@@ -25,7 +25,7 @@ type Message = {
 const starterMessage: Message = {
   id: "welcome",
   role: "assistant",
-  content: "Hi! I'm here to help answer your questions about The Well. What would you like to know?",
+  content: "Hi! I'm here to help answer your questions about The Well. How can I help?",
   sources: [],
 };
 
