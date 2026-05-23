@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const MIN_SIMILARITY_THRESHOLD = Number(process.env.MIN_SIMILARITY_THRESHOLD ?? '0.75');
+const MIN_SIMILARITY_THRESHOLD = Number(process.env.MIN_SIMILARITY_THRESHOLD ?? '0.25');
 const ESCALATION_CONTACT = process.env.ESCALATION_CONTACT || 'The Well directly';
 
 const SYSTEM_PROMPT = `You are a website assistant for The Well Austin Community Church.
@@ -61,6 +61,16 @@ const PASTORAL_KEYWORDS = [
   'personal',
   'going through something',
 ];
+const SERVICE_TIME_KEYWORDS = [
+  'service time',
+  'service times',
+  'what time',
+  'church start',
+  'sunday',
+  'sundays',
+  'gathering',
+  'gatherings',
+];
 
 interface ChatRequestBody {
   question?: unknown;
@@ -103,6 +113,16 @@ function assertEnv(): void {
 function includesKeyword(question: string, keywords: string[]): boolean {
   const normalizedQuestion = question.toLowerCase();
   return keywords.some((keyword) => normalizedQuestion.includes(keyword));
+}
+
+function mergeChunks(primaryChunks: MatchDocument[], additionalChunks: MatchDocument[]): MatchDocument[] {
+  const chunksById = new Map<string, MatchDocument>();
+  for (const chunk of [...additionalChunks, ...primaryChunks]) {
+    if (!chunksById.has(chunk.id)) {
+      chunksById.set(chunk.id, chunk);
+    }
+  }
+  return Array.from(chunksById.values()).slice(0, 5);
 }
 
 async function embedQuestion(question: string): Promise<number[]> {
@@ -224,7 +244,22 @@ export async function POST(request: Request) {
 
     if (error) throw new Error(`Supabase match_documents failed: ${error.message}`);
 
-    const chunks = (data ?? []) as MatchDocument[];
+    let chunks = (data ?? []) as MatchDocument[];
+    if (includesKeyword(question, SERVICE_TIME_KEYWORDS)) {
+      const { data: sundayChunks, error: sundayError } = await supabase
+        .from('documents')
+        .select('id,url,title,section,content,depth,last_indexed_at')
+        .ilike('url', '%/sundays%')
+        .limit(2);
+
+      if (sundayError) throw new Error(`Supabase Sundays lookup failed: ${sundayError.message}`);
+
+      chunks = mergeChunks(chunks, (sundayChunks ?? []).map((chunk) => ({
+        ...chunk,
+        similarity: Math.max(chunks[0]?.similarity ?? 0, MIN_SIMILARITY_THRESHOLD),
+      })) as MatchDocument[]);
+    }
+
     const topSimilarity = chunks[0]?.similarity ?? 0;
     const fallbackTriggered = chunks.length === 0 || topSimilarity < MIN_SIMILARITY_THRESHOLD;
     const answer = fallbackTriggered && includesKeyword(question, PASTORAL_KEYWORDS)
