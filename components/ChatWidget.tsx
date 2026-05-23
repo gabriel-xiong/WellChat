@@ -63,16 +63,65 @@ export default function ChatWidget() {
         throw new Error("Request failed");
       }
 
-      const payload = await response.json() as ChatResponse;
-      const assistantMessage: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: payload.answer,
-        sources: payload.sources,
-        fallbackTriggered: payload.fallback_triggered,
-      };
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const payload = await response.json() as ChatResponse;
+        const assistantMessage: Message = {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: payload.answer,
+          sources: payload.sources,
+          fallbackTriggered: payload.fallback_triggered,
+        };
 
-      setMessages((currentMessages) => [...currentMessages, assistantMessage]);
+        setMessages((currentMessages) => [...currentMessages, assistantMessage]);
+        return;
+      }
+
+      if (!response.body) {
+        throw new Error("Missing response body");
+      }
+
+      const assistantMessageId = `assistant-${Date.now()}`;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let streamedAnswer = "";
+      let hasFirstToken = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const token = decoder.decode(value, { stream: true });
+        if (!token) continue;
+
+        streamedAnswer += token;
+
+        if (!hasFirstToken) {
+          hasFirstToken = true;
+          setIsLoading(false);
+          setMessages((currentMessages) => [
+            ...currentMessages,
+            {
+              id: assistantMessageId,
+              role: "assistant",
+              content: streamedAnswer,
+              sources: [],
+              fallbackTriggered: false,
+            },
+          ]);
+        } else {
+          setMessages((currentMessages) => currentMessages.map((message) => (
+            message.id === assistantMessageId
+              ? { ...message, content: streamedAnswer }
+              : message
+          )));
+        }
+      }
+
+      if (!hasFirstToken) {
+        throw new Error("Empty response");
+      }
     } catch {
       setError("We could not send that message. Please try again.");
     } finally {

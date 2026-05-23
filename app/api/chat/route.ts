@@ -93,14 +93,6 @@ interface EmbeddingResponse {
   data?: Array<{ embedding?: number[] }>;
 }
 
-interface ChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-}
-
 interface MatchDocument {
   id: string;
   url: string;
@@ -213,13 +205,30 @@ function extractMarkdownSources(answer: string): Source[] {
   return Array.from(sources.values());
 }
 
-async function generateAnswer(question: string, chunks: MatchDocument[]): Promise<string> {
+function buildUserMessage(question: string, chunks: MatchDocument[]): string {
   const context = buildContext(chunks);
   const currentDate = new Date().toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
     year: 'numeric',
   });
+
+  return `Today's date is ${currentDate}.
+
+Question:
+${question}
+
+Retrieved context:
+${context}
+
+Answer using only the retrieved context. Include source URLs used in the answer.`;
+}
+
+async function streamAnswer(
+  question: string,
+  chunks: MatchDocument[],
+  logQuery: (answer: string) => Promise<void>
+): Promise<Response> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -230,20 +239,10 @@ async function generateAnswer(question: string, chunks: MatchDocument[]): Promis
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `Today's date is ${currentDate}.
-
-Question:
-${question}
-
-Retrieved context:
-${context}
-
-Answer using only the retrieved context. Include source URLs used in the answer.`,
-        },
+        { role: 'user', content: buildUserMessage(question, chunks) },
       ],
       temperature: 0.2,
+      stream: true,
     }),
   });
 
@@ -252,8 +251,56 @@ Answer using only the retrieved context. Include source URLs used in the answer.
     throw new Error(`OpenAI chat request failed: ${response.status} ${response.statusText} - ${body}`);
   }
 
-  const payload = await response.json() as ChatCompletionResponse;
-  return payload.choices?.[0]?.message?.content?.trim() || FALLBACK_ANSWER;
+  if (!response.body) throw new Error('OpenAI chat response did not include a stream.');
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const reader = response.body.getReader();
+  let answer = '';
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine.startsWith('data: ')) continue;
+
+            const data = trimmedLine.slice(6);
+            if (data === '[DONE]') continue;
+
+            const payload = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+            const content = payload.choices?.[0]?.delta?.content;
+            if (content) {
+              answer += content;
+              controller.enqueue(encoder.encode(content));
+            }
+          }
+        }
+
+        await logQuery(answer.trim() || FALLBACK_ANSWER);
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -286,26 +333,30 @@ export async function POST(request: Request) {
 
     const topSimilarity = chunks[0]?.similarity ?? 0;
     const fallbackTriggered = chunks.length === 0 || topSimilarity < MIN_SIMILARITY_THRESHOLD;
-    const answer = fallbackTriggered && includesKeyword(question, PASTORAL_KEYWORDS)
-      ? PASTORAL_FALLBACK_ANSWER
-      : fallbackTriggered
-        ? FALLBACK_ANSWER
-        : await generateAnswer(question, chunks);
-    const sources = fallbackTriggered ? [] : extractMarkdownSources(answer);
+    const logQuery = async (answer: string) => {
+      const { error: logError } = await supabase.from('query_logs').insert({
+        question,
+        retrieved_chunk_ids: chunks.map((chunk) => chunk.id),
+        retrieved_urls: chunks.map((chunk) => chunk.url),
+        retrieved_titles: chunks.map((chunk) => chunk.title || 'Untitled Page'),
+        similarity_scores: chunks.map((chunk) => chunk.similarity),
+        answer,
+        fallback_triggered: fallbackTriggered,
+      });
 
-    const { error: logError } = await supabase.from('query_logs').insert({
-      question,
-      retrieved_chunk_ids: chunks.map((chunk) => chunk.id),
-      retrieved_urls: chunks.map((chunk) => chunk.url),
-      retrieved_titles: chunks.map((chunk) => chunk.title || 'Untitled Page'),
-      similarity_scores: chunks.map((chunk) => chunk.similarity),
-      answer,
-      fallback_triggered: fallbackTriggered,
-    });
+      if (logError) {
+        console.error('Failed to log chat query:', logError.message);
+      }
+    };
 
-    if (logError) {
-      console.error('Failed to log chat query:', logError.message);
+    if (!fallbackTriggered) {
+      return streamAnswer(question, chunks, logQuery);
     }
+
+    const answer = includesKeyword(question, PASTORAL_KEYWORDS) ? PASTORAL_FALLBACK_ANSWER : FALLBACK_ANSWER;
+    const sources = extractMarkdownSources(answer);
+
+    await logQuery(answer);
 
     return Response.json({ answer, sources, fallback_triggered: fallbackTriggered });
   } catch (error) {
