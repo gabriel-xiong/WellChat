@@ -61,15 +61,28 @@ const PASTORAL_KEYWORDS = [
   'personal',
   'going through something',
 ];
-const SERVICE_TIME_KEYWORDS = [
-  'service time',
-  'service times',
-  'what time',
-  'church start',
-  'sunday',
-  'sundays',
-  'gathering',
-  'gatherings',
+const STOP_WORDS = [
+  'about',
+  'after',
+  'and',
+  'are',
+  'can',
+  'does',
+  'for',
+  'from',
+  'how',
+  'is',
+  'me',
+  'of',
+  'on',
+  'the',
+  'to',
+  'us',
+  'what',
+  'when',
+  'where',
+  'with',
+  'you',
 ];
 
 interface ChatRequestBody {
@@ -115,14 +128,39 @@ function includesKeyword(question: string, keywords: string[]): boolean {
   return keywords.some((keyword) => normalizedQuestion.includes(keyword));
 }
 
-function mergeChunks(primaryChunks: MatchDocument[], additionalChunks: MatchDocument[]): MatchDocument[] {
-  const chunksById = new Map<string, MatchDocument>();
-  for (const chunk of [...additionalChunks, ...primaryChunks]) {
-    if (!chunksById.has(chunk.id)) {
-      chunksById.set(chunk.id, chunk);
-    }
-  }
-  return Array.from(chunksById.values()).slice(0, 5);
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/https?:\/\//g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !STOP_WORDS.includes(token));
+}
+
+function lexicalBoost(question: string, chunk: MatchDocument): number {
+  const questionTokens = tokenize(question);
+  const urlTokens = tokenize(chunk.url);
+  const titleTokens = tokenize(chunk.title || '');
+  const sectionTokens = tokenize(chunk.section || '');
+  const contentTokens = tokenize(chunk.content.slice(0, 500));
+  const urlTitleSectionTokens = new Set([...urlTokens, ...titleTokens, ...sectionTokens]);
+  const contentTokenSet = new Set(contentTokens);
+
+  return questionTokens.reduce((score, token) => {
+    if (urlTitleSectionTokens.has(token)) return score + 0.08;
+    if (contentTokenSet.has(token)) return score + 0.04;
+    return score;
+  }, 0);
+}
+
+function rerankChunks(question: string, chunks: MatchDocument[], limit = 5): MatchDocument[] {
+  return [...chunks]
+    .sort((left, right) => {
+      const leftScore = left.similarity + lexicalBoost(question, left);
+      const rightScore = right.similarity + lexicalBoost(question, right);
+      return rightScore - leftScore;
+    })
+    .slice(0, limit);
 }
 
 async function embedQuestion(question: string): Promise<number[]> {
@@ -239,26 +277,12 @@ export async function POST(request: Request) {
     const { data, error } = await supabase.rpc('match_documents', {
       query_embedding: questionEmbedding,
       similarity_threshold: MIN_SIMILARITY_THRESHOLD,
-      limit_count: 5,
+      limit_count: 12,
     });
 
     if (error) throw new Error(`Supabase match_documents failed: ${error.message}`);
 
-    let chunks = (data ?? []) as MatchDocument[];
-    if (includesKeyword(question, SERVICE_TIME_KEYWORDS)) {
-      const { data: sundayChunks, error: sundayError } = await supabase
-        .from('documents')
-        .select('id,url,title,section,content,depth,last_indexed_at')
-        .ilike('url', '%/sundays%')
-        .limit(2);
-
-      if (sundayError) throw new Error(`Supabase Sundays lookup failed: ${sundayError.message}`);
-
-      chunks = mergeChunks(chunks, (sundayChunks ?? []).map((chunk) => ({
-        ...chunk,
-        similarity: Math.max(chunks[0]?.similarity ?? 0, MIN_SIMILARITY_THRESHOLD),
-      })) as MatchDocument[]);
-    }
+    const chunks = rerankChunks(question, (data ?? []) as MatchDocument[]);
 
     const topSimilarity = chunks[0]?.similarity ?? 0;
     const fallbackTriggered = chunks.length === 0 || topSimilarity < MIN_SIMILARITY_THRESHOLD;
