@@ -271,8 +271,8 @@ async function deleteExistingRows(url: string): Promise<void> {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/documents?url=eq.${encodedUrl}`, {
     method: 'DELETE',
     headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY!,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
       Accept: 'application/json',
     },
   });
@@ -298,8 +298,8 @@ async function insertChunks(chunks: PageChunk[], indexedAt: string): Promise<voi
   const response = await fetch(`${SUPABASE_URL}/rest/v1/documents`, {
     method: 'POST',
     headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY!,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
