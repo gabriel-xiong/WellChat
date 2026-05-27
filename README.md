@@ -4,15 +4,7 @@ A production RAG-powered chat assistant deployed for [The Well Austin Community 
 
 ## Demo
 
-> Live deployment: [wellchat demo]([https://the-well-rag.vercel.app)](https://the-well-rag-agent.vercel.app/)
-
-## What I Built
-
-- Full-stack chat widget with real-time streaming responses
-- Supabase pgvector retrieval backend with hybrid semantic + lexical re-ranking
-- Website ingestion and section-aware chunking pipeline
-- Guardrail routing for crisis and pastoral-care queries
-- Query logging for retrieval debugging and similarity threshold tuning
+> Live deployment: https://the-well-rag-agent.vercel.app
 
 ## Overview
 
