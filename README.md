@@ -4,9 +4,7 @@ A production RAG-powered chat assistant deployed for [The Well Austin Community 
 
 ## Demo
 
-> Live deployment: [wellchat demo](https://the-well-rag.vercel.app)
-
-![WellChat screenshot](./assets/demo.png)
+> Live deployment: [wellchat demo]([https://the-well-rag.vercel.app)](https://the-well-rag-agent.vercel.app/)
 
 ## What I Built
 
