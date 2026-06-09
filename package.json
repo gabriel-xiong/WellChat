@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "ingest": "dotenv -e .env.local -- tsx scripts/ingest.ts"
+    "ingest": "dotenv -e .env.local -- tsx scripts/ingest.ts",
+    "benchmark:latency": "dotenv -e .env.local -- tsx scripts/benchmark-latency.ts",
+    "benchmark:retrieval": "dotenv -e .env.local -- tsx scripts/benchmark-retrieval.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",

@@ -1,10 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
+import { MatchDocument, rerankChunks } from '@/lib/retrieval';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MIN_SIMILARITY_THRESHOLD = Number(process.env.MIN_SIMILARITY_THRESHOLD ?? '0.25');
 const ESCALATION_CONTACT = process.env.ESCALATION_CONTACT || 'The Well directly';
+const RATE_LIMIT_MAX_REQUESTS = 20;
+const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
+const RATE_LIMIT_REDIS_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)?.replace(/\/+$/, '');
+const RATE_LIMIT_REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 
 const SYSTEM_PROMPT = `You are a website assistant for The Well Austin Community Church.
 Your job is to help visitors find practical information from
@@ -39,7 +44,7 @@ Crisis Lifeline immediately.
 Do not invent service times, staff names, event details, or
 church policies.`;
 
-const FALLBACK_ANSWER = `I can't answer that based on what I know. Please contact us directly at at ${ESCALATION_CONTACT}.`;
+const FALLBACK_ANSWER = `I can't answer that based on what I know. Please contact us directly at ${ESCALATION_CONTACT}.`;
 const CRISIS_ANSWER = `If you are in crisis or having thoughts of harming yourself, please call 911 or the 988 Suicide and Crisis Lifeline (call or text 988) immediately. You can also reach out to our team at ${ESCALATION_CONTACT}.`;
 const PASTORAL_FALLBACK_ANSWER = `It sounds like you may be looking for personal support. We'd encourage you to reach out to our team directly — we'd love to connect you with someone who can help. Contact us at ${ESCALATION_CONTACT}.`;
 const CRISIS_KEYWORDS = [
@@ -61,29 +66,6 @@ const PASTORAL_KEYWORDS = [
   'personal',
   'going through something',
 ];
-const STOP_WORDS = [
-  'about',
-  'after',
-  'and',
-  'are',
-  'can',
-  'does',
-  'for',
-  'from',
-  'how',
-  'is',
-  'me',
-  'of',
-  'on',
-  'the',
-  'to',
-  'us',
-  'what',
-  'when',
-  'where',
-  'with',
-  'you',
-];
 
 interface ChatRequestBody {
   question?: unknown;
@@ -93,26 +75,23 @@ interface EmbeddingResponse {
   data?: Array<{ embedding?: number[] }>;
 }
 
-interface MatchDocument {
-  id: string;
-  url: string;
-  title: string | null;
-  section: string | null;
-  content: string;
-  depth: string | null;
-  last_indexed_at: string | null;
-  similarity: number;
-}
-
 interface Source {
   title: string;
   url: string;
+}
+
+interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetAt: number;
 }
 
 function assertEnv(): void {
   if (!SUPABASE_URL) throw new Error('NEXT_PUBLIC_SUPABASE_URL is required.');
   if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required.');
   if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required.');
+  if (!RATE_LIMIT_REDIS_URL) throw new Error('KV_REST_API_URL or UPSTASH_REDIS_REST_URL is required.');
+  if (!RATE_LIMIT_REDIS_TOKEN) throw new Error('KV_REST_API_TOKEN or UPSTASH_REDIS_REST_TOKEN is required.');
 }
 
 function includesKeyword(question: string, keywords: string[]): boolean {
@@ -120,39 +99,51 @@ function includesKeyword(question: string, keywords: string[]): boolean {
   return keywords.some((keyword) => normalizedQuestion.includes(keyword));
 }
 
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/https?:\/\//g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(/\s+/)
-    .filter((token) => token.length > 2 && !STOP_WORDS.includes(token));
+function getClientIp(request: Request): string {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  return forwardedFor?.split(',')[0]?.trim() || 'unknown';
 }
 
-function lexicalBoost(question: string, chunk: MatchDocument): number {
-  const questionTokens = tokenize(question);
-  const urlTokens = tokenize(chunk.url);
-  const titleTokens = tokenize(chunk.title || '');
-  const sectionTokens = tokenize(chunk.section || '');
-  const contentTokens = tokenize(chunk.content.slice(0, 500));
-  const urlTitleSectionTokens = new Set([...urlTokens, ...titleTokens, ...sectionTokens]);
-  const contentTokenSet = new Set(contentTokens);
+async function redisCommand<T>(command: Array<string | number>): Promise<T> {
+  if (!RATE_LIMIT_REDIS_URL) throw new Error('KV_REST_API_URL or UPSTASH_REDIS_REST_URL is required.');
+  if (!RATE_LIMIT_REDIS_TOKEN) throw new Error('KV_REST_API_TOKEN or UPSTASH_REDIS_REST_TOKEN is required.');
 
-  return questionTokens.reduce((score, token) => {
-    if (urlTitleSectionTokens.has(token)) return score + 0.08;
-    if (contentTokenSet.has(token)) return score + 0.04;
-    return score;
-  }, 0);
+  const response = await fetch(RATE_LIMIT_REDIS_URL!, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RATE_LIMIT_REDIS_TOKEN!}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(command),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Rate limit store request failed: ${response.status} ${response.statusText} - ${body}`);
+  }
+
+  const payload = await response.json() as { result?: T; error?: string };
+  if (payload.error) throw new Error(`Rate limit store error: ${payload.error}`);
+  return payload.result as T;
 }
 
-function rerankChunks(question: string, chunks: MatchDocument[], limit = 5): MatchDocument[] {
-  return [...chunks]
-    .sort((left, right) => {
-      const leftScore = left.similarity + lexicalBoost(question, left);
-      const rightScore = right.similarity + lexicalBoost(question, right);
-      return rightScore - leftScore;
-    })
-    .slice(0, limit);
+async function checkRateLimit(ip: string): Promise<RateLimitResult> {
+  const key = `rate-limit:chat:${ip}`;
+  const count = Number(await redisCommand<number>(['INCR', key]));
+
+  if (count === 1) {
+    await redisCommand<number>(['EXPIRE', key, RATE_LIMIT_WINDOW_SECONDS]);
+  }
+
+  const ttl = Number(await redisCommand<number>(['TTL', key]));
+  const resetAt = Date.now() + Math.max(ttl, 0) * 1000;
+
+  return {
+    allowed: count <= RATE_LIMIT_MAX_REQUESTS,
+    remaining: Math.max(RATE_LIMIT_MAX_REQUESTS - count, 0),
+    resetAt,
+  };
 }
 
 async function embedQuestion(question: string): Promise<number[]> {
@@ -305,6 +296,25 @@ async function streamAnswer(
 
 export async function POST(request: Request) {
   try {
+    const clientIp = getClientIp(request);
+    const rateLimit = await checkRateLimit(clientIp);
+    if (!rateLimit.allowed) {
+      const retryAfterSeconds = Math.max(Math.ceil((rateLimit.resetAt - Date.now()) / 1000), 1);
+
+      return Response.json(
+        { error: 'Too many requests. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfterSeconds),
+            'X-RateLimit-Limit': String(RATE_LIMIT_MAX_REQUESTS),
+            'X-RateLimit-Remaining': String(rateLimit.remaining),
+            'X-RateLimit-Reset': String(Math.ceil(rateLimit.resetAt / 1000)),
+          },
+        }
+      );
+    }
+
     const body = await request.json() as ChatRequestBody;
     const question = typeof body.question === 'string' ? body.question.trim() : '';
     if (!question) {
