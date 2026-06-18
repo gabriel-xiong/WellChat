@@ -122,3 +122,5 @@ Creating turbopack project { dir: 'C:\\Users\\gpdxi\\Downloads\\the-well-rag', t
 ✓ Compiled in 62ms
  GET / 200 in 179ms (next.js: 74ms, application-code: 105ms)
  GET / 200 in 52ms (next.js: 3ms, application-code: 48ms)
+ GET / 200 in 102ms (next.js: 4ms, application-code: 99ms)
+ POST /api/chat 200 in 5.8s (next.js: 47ms, application-code: 5.7s)
