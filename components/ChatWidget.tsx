@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useRef, useState } from "react";
+import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 
 type Source = {
@@ -25,9 +26,16 @@ type Message = {
 const starterMessage: Message = {
   id: "welcome",
   role: "assistant",
-  content: "Hi! I'm here to help answer your questions about The Well. How can I help?",
+  content: "Hey there! I'm Droplet, here to answer any questions you may have about the Well. How can I help?",
   sources: [],
 };
+
+const suggestedQuestions = [
+  "When are Sunday services?",
+  "What does The Well believe?",
+  "How can I join a community group?",
+  "How can I serve or volunteer?",
+];
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
@@ -35,10 +43,14 @@ export default function ChatWidget() {
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [askedSuggestions, setAskedSuggestions] = useState<string[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const visibleSuggestions = suggestedQuestions
+    .filter((suggestedQuestion) => !askedSuggestions.includes(suggestedQuestion))
+    .slice(0, 3);
 
-  async function sendQuestion() {
-    const trimmedQuestion = question.trim();
+  async function sendQuestion(questionOverride?: string) {
+    const trimmedQuestion = (questionOverride ?? question).trim();
     if (!trimmedQuestion || isLoading) return;
 
     const userMessage: Message = {
@@ -142,6 +154,11 @@ export default function ChatWidget() {
     }
   }
 
+  function handleSuggestedQuestion(suggestedQuestion: string) {
+    setAskedSuggestions((currentSuggestions) => [...currentSuggestions, suggestedQuestion]);
+    void sendQuestion(suggestedQuestion);
+  }
+
   return (
     <div className="fixed inset-x-4 bottom-4 z-50 flex flex-col items-end gap-3 sm:inset-x-auto sm:right-6 sm:bottom-6">
       {isOpen ? (
@@ -156,9 +173,9 @@ export default function ChatWidget() {
               </div>
               <div>
                 <h2 className="text-sm font-semibold tracking-[0.01em] text-[#123f39]">
-                  The Well Assistant
+                  Droplet
                 </h2>
-                <p className="text-xs text-[#53746d]">Website answers with sources</p>
+                <p className="text-xs text-[#53746d]">The Well website guide</p>
               </div>
             </div>
             <button
@@ -175,13 +192,24 @@ export default function ChatWidget() {
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex items-end ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
+                {message.role === "assistant" ? (
+                  <div className="relative z-10 mr-0.5 flex h-9 w-8 shrink-0 items-end justify-center overflow-visible">
+                    <Image
+                      src="/raindrop-avatar.svg"
+                      alt="Droplet"
+                      width={28}
+                      height={32}
+                      className="h-8 w-auto object-contain"
+                    />
+                  </div>
+                ) : null}
                 <article
-                  className={`max-w-[86%] rounded-[1.1rem] px-4 py-3 text-sm leading-6 ${
+                  className={`relative max-w-[86%] rounded-[1.1rem] px-4 py-3 text-sm leading-6 ${
                     message.role === "user"
                       ? "bg-[#00B5A3] text-white"
-                      : "border border-[#d9ebe6] bg-white text-[#193f3a]"
+                      : "border border-[#d9ebe6] bg-white text-[#193f3a] before:absolute before:-left-[5px] before:bottom-3 before:size-2.5 before:rotate-45 before:border-b before:border-l before:border-[#d9ebe6] before:bg-white"
                   }`}
                 >
                   {message.role === "assistant" ? (
@@ -217,6 +245,22 @@ export default function ChatWidget() {
               </div>
             ) : null}
           </div>
+
+          {visibleSuggestions.length > 0 ? (
+            <div className="flex flex-wrap gap-2 border-t border-[#d9ebe6] bg-[#f7fbf9] px-3 py-3">
+              {visibleSuggestions.map((suggestedQuestion) => (
+                <button
+                  key={suggestedQuestion}
+                  type="button"
+                  onClick={() => handleSuggestedQuestion(suggestedQuestion)}
+                  disabled={isLoading}
+                  className="rounded-full border border-[#abdcd5] bg-white px-3 py-2 text-left text-xs font-medium leading-4 text-[#17665c] transition hover:border-[#00B5A3] hover:bg-[#e5f7f3] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {suggestedQuestion}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <form onSubmit={handleSubmit} className="border-t border-[#d9ebe6] bg-white p-3">
             {error ? (
