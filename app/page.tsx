@@ -16,10 +16,10 @@ export default function Home() {
 
         <div className="max-w-2xl">
           <h1 className="text-4xl font-semibold leading-tight tracking-normal text-[#123f39] sm:text-5xl">
-            Ask practical questions from approved website content.
+            Your questions about The Well, answered.
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-[#53746d] sm:text-lg">
-            This demo keeps answers grounded in indexed pages from The Well and shows sources when it responds.
+            Answers are grounded in website content and include links to relevant sources.
           </p>
         </div>
 
