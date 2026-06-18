@@ -2,15 +2,16 @@
 
 A production RAG-powered chat assistant deployed for [The Well Austin Community Church](https://thewellaustin.com). Answers visitor questions using semantic search over approved website content, with source-grounded responses and links to supporting pages.
 
-## Demo
-
-> Live deployment: https://the-well-rag-agent.vercel.app
 
 ## Overview
 
 WellChat ingests approved church website pages, chunks and embeds the content using OpenAI embeddings, and stores vectors in Supabase pgvector. When a visitor asks a question, the system embeds the query, retrieves the most relevant chunks using a hybrid re-ranking pipeline, and generates a grounded answer via GPT-4o mini with streaming.
 
 Sensitive queries (pastoral care, crisis/self-harm) are handled with dedicated guardrails that bypass retrieval entirely and route to appropriate resources.
+
+## Demo
+
+Live deployment: https://the-well-rag-agent.vercel.app
 
 ## Stack
 
