@@ -137,6 +137,29 @@ git push origin main
 
 Set the same environment variables in Vercel → Project Settings → Environment Variables.
 
+## WordPress Embed
+
+The production widget is delivered through a small loader script that creates an isolated iframe. WordPress does not receive API keys or run any retrieval logic.
+
+```html
+<script
+  src="https://the-well-rag-agent.vercel.app/widget.js?v=1"
+  data-site="the-well"
+  data-cfasync="false"
+  async
+></script>
+```
+
+Add the script globally at the end of the `body` element. The dedicated iframe page is available at `/widget`, and `/embed-preview` provides a neutral host page for testing the loader before WordPress installation.
+
+The iframe security policy currently allows these parent sites:
+
+- `https://stg-getwellaustin-staging.kinsta.cloud`
+- `https://thewellaustin.com`
+- `https://www.thewellaustin.com`
+
+See `wordpress/README.md` for Elementor Custom Code and plugin installation options.
+
 ## Environment Variables
 
 | Variable | Description |

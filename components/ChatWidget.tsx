@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 
@@ -23,6 +23,10 @@ type Message = {
   fallbackTriggered?: boolean;
 };
 
+type ChatWidgetProps = {
+  embedded?: boolean;
+};
+
 const starterMessage: Message = {
   id: "welcome",
   role: "assistant",
@@ -37,7 +41,7 @@ const suggestedQuestions = [
   "How can I serve or volunteer?",
 ];
 
-export default function ChatWidget() {
+export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([starterMessage]);
   const [question, setQuestion] = useState("");
@@ -45,16 +49,43 @@ export default function ChatWidget() {
   const [error, setError] = useState("");
   const [askedSuggestions, setAskedSuggestions] = useState<string[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messageSequenceRef = useRef(0);
+  const streamedAnswerRef = useRef("");
+  const hasFirstTokenRef = useRef(false);
   const visibleSuggestions = suggestedQuestions
     .filter((suggestedQuestion) => !askedSuggestions.includes(suggestedQuestion))
     .slice(0, 3);
+
+  useEffect(() => {
+    if (!embedded || window.parent === window) return;
+
+    const configuredParentOrigin = new URLSearchParams(window.location.search).get("parentOrigin");
+    const referrerOrigin = document.referrer ? new URL(document.referrer).origin : "";
+    const parentOrigin = configuredParentOrigin || referrerOrigin;
+
+    if (!parentOrigin) return;
+
+    window.parent.postMessage(
+      {
+        source: "the-well-widget",
+        type: "resize",
+        open: isOpen,
+      },
+      parentOrigin
+    );
+  }, [embedded, isOpen]);
+
+  function createMessageId(role: Message["role"]): string {
+    messageSequenceRef.current += 1;
+    return `${role}-${messageSequenceRef.current}`;
+  }
 
   async function sendQuestion(questionOverride?: string) {
     const trimmedQuestion = (questionOverride ?? question).trim();
     if (!trimmedQuestion || isLoading) return;
 
     const userMessage: Message = {
-      id: `user-${Date.now()}`,
+      id: createMessageId("user"),
       role: "user",
       content: trimmedQuestion,
     };
@@ -79,7 +110,7 @@ export default function ChatWidget() {
       if (contentType.includes("application/json")) {
         const payload = await response.json() as ChatResponse;
         const assistantMessage: Message = {
-          id: `assistant-${Date.now()}`,
+          id: createMessageId("assistant"),
           role: "assistant",
           content: payload.answer,
           sources: payload.sources,
@@ -94,11 +125,11 @@ export default function ChatWidget() {
         throw new Error("Missing response body");
       }
 
-      const assistantMessageId = `assistant-${Date.now()}`;
+      const assistantMessageId = createMessageId("assistant");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let streamedAnswer = "";
-      let hasFirstToken = false;
+      streamedAnswerRef.current = "";
+      hasFirstTokenRef.current = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -107,17 +138,17 @@ export default function ChatWidget() {
         const token = decoder.decode(value, { stream: true });
         if (!token) continue;
 
-        streamedAnswer += token;
+        streamedAnswerRef.current += token;
 
-        if (!hasFirstToken) {
-          hasFirstToken = true;
+        if (!hasFirstTokenRef.current) {
+          hasFirstTokenRef.current = true;
           setIsLoading(false);
           setMessages((currentMessages) => [
             ...currentMessages,
             {
               id: assistantMessageId,
               role: "assistant",
-              content: streamedAnswer,
+              content: streamedAnswerRef.current,
               sources: [],
               fallbackTriggered: false,
             },
@@ -125,13 +156,13 @@ export default function ChatWidget() {
         } else {
           setMessages((currentMessages) => currentMessages.map((message) => (
             message.id === assistantMessageId
-              ? { ...message, content: streamedAnswer }
+              ? { ...message, content: streamedAnswerRef.current }
               : message
           )));
         }
       }
 
-      if (!hasFirstToken) {
+      if (!hasFirstTokenRef.current) {
         throw new Error("Empty response");
       }
     } catch {
@@ -164,7 +195,7 @@ export default function ChatWidget() {
       {isOpen ? (
         <section
           aria-label="The Well chat assistant"
-          className="flex h-[min(680px,calc(100vh-2rem))] w-full flex-col overflow-hidden rounded-[1.35rem] border border-[#cfe5df] bg-[#fbfdfb] shadow-[0_24px_70px_rgba(11,64,58,0.2)] sm:w-[410px]"
+          className="flex h-[min(680px,calc(100vh-2rem))] w-full flex-col overflow-hidden rounded-[1.35rem] border border-[#cfe5df] bg-[#fbfdfb] shadow-[0_24px_70px_rgba(11,64,58,0.2)] max-[440px]:h-[calc(100vh-2rem)] sm:w-[410px]"
         >
           <header className="flex items-center justify-between gap-4 border-b border-[#d9ebe6] bg-[#f3faf7] px-5 py-4">
             <div className="flex items-center gap-3">
@@ -290,18 +321,20 @@ export default function ChatWidget() {
         </section>
       ) : null}
 
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="flex h-14 items-center gap-3 rounded-full bg-[#00B5A3] px-5 text-sm font-semibold text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
-        aria-expanded={isOpen}
-        aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
-      >
-        <span className="flex size-7 items-center justify-center rounded-full bg-white/20 text-base">
-          ?
-        </span>
-        {isOpen ? "Close" : "Ask The Well"}
-      </button>
+      {!embedded || !isOpen ? (
+        <button
+          type="button"
+          onClick={() => setIsOpen((current) => !current)}
+          className="flex h-14 items-center gap-3 rounded-full bg-[#00B5A3] px-5 text-sm font-semibold text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
+          aria-expanded={isOpen}
+          aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
+        >
+          <span className="flex size-7 items-center justify-center rounded-full bg-white/20 text-base">
+            ?
+          </span>
+          {isOpen ? "Close" : "Ask The Well"}
+        </button>
+      ) : null}
     </div>
   );
 }
