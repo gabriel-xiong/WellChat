@@ -10,6 +10,22 @@ const RATE_LIMIT_MAX_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
 const RATE_LIMIT_REDIS_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)?.replace(/\/+$/, '');
 const RATE_LIMIT_REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+const RATE_LIMIT_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {count, ttl}
+`;
+
+function createSupabaseClient() {
+  return createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
+    auth: { persistSession: false },
+  });
+}
+
+let supabaseClient: ReturnType<typeof createSupabaseClient> | null = null;
 
 const SYSTEM_PROMPT = `You are a website assistant for The Well Austin Community Church.
 Your job is to help visitors find practical information from
@@ -130,13 +146,13 @@ async function redisCommand<T>(command: Array<string | number>): Promise<T> {
 
 async function checkRateLimit(ip: string): Promise<RateLimitResult> {
   const key = `rate-limit:chat:${ip}`;
-  const count = Number(await redisCommand<number>(['INCR', key]));
-
-  if (count === 1) {
-    await redisCommand<number>(['EXPIRE', key, RATE_LIMIT_WINDOW_SECONDS]);
-  }
-
-  const ttl = Number(await redisCommand<number>(['TTL', key]));
+  const [count, ttl] = await redisCommand<[number, number]>([
+    'EVAL',
+    RATE_LIMIT_SCRIPT,
+    1,
+    key,
+    RATE_LIMIT_WINDOW_SECONDS,
+  ]);
   const resetAt = Date.now() + Math.max(ttl, 0) * 1000;
 
   return {
@@ -144,6 +160,14 @@ async function checkRateLimit(ip: string): Promise<RateLimitResult> {
     remaining: Math.max(RATE_LIMIT_MAX_REQUESTS - count, 0),
     resetAt,
   };
+}
+
+function getSupabaseClient() {
+  if (!supabaseClient) {
+    supabaseClient = createSupabaseClient();
+  }
+
+  return supabaseClient;
 }
 
 async function embedQuestion(question: string): Promise<number[]> {
@@ -278,8 +302,13 @@ async function streamAnswer(
           }
         }
 
-        await logQuery(answer.trim() || FALLBACK_ANSWER);
         controller.close();
+
+        try {
+          await logQuery(answer.trim() || FALLBACK_ANSWER);
+        } catch (error) {
+          console.error('Failed to log streamed chat query:', error);
+        }
       } catch (error) {
         controller.error(error);
       }
@@ -327,9 +356,7 @@ export async function POST(request: Request) {
 
     assertEnv();
 
-    const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
-      auth: { persistSession: false },
-    });
+    const supabase = getSupabaseClient();
     const questionEmbedding = await embedQuestion(question);
     const { data, error } = await supabase.rpc('match_documents', {
       query_embedding: questionEmbedding,
