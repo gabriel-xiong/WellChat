@@ -25,6 +25,17 @@
     similarity_scores float8[],
     answer text,
     fallback_triggered boolean,
+    category text,
+    cache_hit boolean not null default false,
+    time_to_first_token_ms integer,
+    total_response_time_ms integer,
+    created_at timestamptz not null default now()
+  );
+
+  create table if not exists chat_events (
+    id uuid primary key default gen_random_uuid(),
+    event_type text not null check (event_type in ('rate_limited', 'api_error')),
+    metadata jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now()
   );
 
@@ -62,3 +73,12 @@
     order by d.embedding <=> query_embedding asc
     limit limit_count;
   $$;
+
+  alter table documents enable row level security;
+  alter table query_logs enable row level security;
+  alter table chat_events enable row level security;
+
+  revoke all on table documents from anon, authenticated;
+  revoke all on table query_logs from anon, authenticated;
+  revoke all on table chat_events from anon, authenticated;
+  revoke execute on function match_documents(vector, float8, int) from anon, authenticated;

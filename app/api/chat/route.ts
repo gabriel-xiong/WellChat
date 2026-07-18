@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
+import { after } from 'next/server';
 import { MatchDocument, rerankChunks } from '@/lib/retrieval';
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
+import { classifyQuestion } from '@/lib/chat-analytics';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -256,7 +258,7 @@ ${context}
 Answer using only the retrieved context. Include source URLs used in the answer.`;
 }
 
-function cachedAnswerResponse(answer: string, logQuery: (answer: string) => Promise<void>): Response {
+function cachedAnswerResponse(answer: string, queryId: string, logQuery: (answer: string) => Promise<void>): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -276,6 +278,7 @@ function cachedAnswerResponse(answer: string, logQuery: (answer: string) => Prom
       'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Chat-Cache': 'HIT',
+      'X-Query-Id': queryId,
     },
   });
 }
@@ -283,6 +286,7 @@ function cachedAnswerResponse(answer: string, logQuery: (answer: string) => Prom
 async function streamAnswer(
   question: string,
   chunks: MatchDocument[],
+  queryId: string,
   completeAnswer: (answer: string) => Promise<void>
 ): Promise<Response> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -361,6 +365,7 @@ async function streamAnswer(
       'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'no-cache',
       'X-Chat-Cache': 'MISS',
+      'X-Query-Id': queryId,
     },
   });
 }
@@ -371,6 +376,8 @@ export async function POST(request: Request) {
     const rateLimit = await checkRateLimit(clientIp);
     if (!rateLimit.allowed) {
       const retryAfterSeconds = Math.max(Math.ceil((rateLimit.resetAt - Date.now()) / 1000), 1);
+
+      after(() => logChatEvent('rate_limited'));
 
       return Response.json(
         { error: 'Too many requests. Please try again later.' },
@@ -399,8 +406,17 @@ export async function POST(request: Request) {
       );
     }
 
+    const queryId = crypto.randomUUID();
+    const category = classifyQuestion(question);
+
     if (includesKeyword(question, CRISIS_KEYWORDS)) {
-      return Response.json({ answer: CRISIS_ANSWER, sources: [], fallback_triggered: true });
+      after(() => logStandaloneQuery({
+        id: queryId,
+        question,
+        answer: CRISIS_ANSWER,
+        category: 'crisis',
+      }));
+      return Response.json({ answer: CRISIS_ANSWER, sources: [], fallback_triggered: true, query_id: queryId });
     }
 
     assertEnv();
@@ -414,6 +430,7 @@ export async function POST(request: Request) {
     if (cachedAnswer) {
       const logCachedQuery = async (answer: string) => {
         const { error: logError } = await supabase.from('query_logs').insert({
+          id: queryId,
           question,
           retrieved_chunk_ids: [],
           retrieved_urls: [],
@@ -421,6 +438,8 @@ export async function POST(request: Request) {
           similarity_scores: [],
           answer,
           fallback_triggered: false,
+          category,
+          cache_hit: true,
         });
 
         if (logError) {
@@ -428,7 +447,7 @@ export async function POST(request: Request) {
         }
       };
 
-      return cachedAnswerResponse(cachedAnswer, logCachedQuery);
+      return cachedAnswerResponse(cachedAnswer, queryId, logCachedQuery);
     }
 
     const questionEmbedding = await embedQuestion(question);
@@ -446,6 +465,7 @@ export async function POST(request: Request) {
     const fallbackTriggered = chunks.length === 0 || topSimilarity < MIN_SIMILARITY_THRESHOLD;
     const logQuery = async (answer: string) => {
       const { error: logError } = await supabase.from('query_logs').insert({
+        id: queryId,
         question,
         retrieved_chunk_ids: chunks.map((chunk) => chunk.id),
         retrieved_urls: chunks.map((chunk) => chunk.url),
@@ -453,6 +473,8 @@ export async function POST(request: Request) {
         similarity_scores: chunks.map((chunk) => chunk.similarity),
         answer,
         fallback_triggered: fallbackTriggered,
+        category,
+        cache_hit: false,
       });
 
       if (logError) {
@@ -475,7 +497,7 @@ export async function POST(request: Request) {
         }
       };
 
-      return streamAnswer(question, chunks, completeAnswer);
+      return streamAnswer(question, chunks, queryId, completeAnswer);
     }
 
     const answer = includesKeyword(question, PASTORAL_KEYWORDS) ? PASTORAL_FALLBACK_ANSWER : FALLBACK_ANSWER;
@@ -483,12 +505,46 @@ export async function POST(request: Request) {
 
     await logQuery(answer);
 
-    return Response.json({ answer, sources, fallback_triggered: fallbackTriggered });
+    return Response.json({ answer, sources, fallback_triggered: fallbackTriggered, query_id: queryId });
   } catch (error) {
     console.error(error);
+    after(() => logChatEvent('api_error'));
     return Response.json(
       { error: 'Unable to process chat request.' },
       { status: 500 }
     );
+  }
+}
+
+async function logStandaloneQuery(entry: {
+  id: string;
+  question: string;
+  answer: string;
+  category: string;
+}): Promise<void> {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
+    const { error } = await getSupabaseClient().from('query_logs').insert({
+      ...entry,
+      retrieved_chunk_ids: [],
+      retrieved_urls: [],
+      retrieved_titles: [],
+      similarity_scores: [],
+      fallback_triggered: true,
+      cache_hit: false,
+    });
+    if (error) console.error('Failed to log guarded chat query:', error.message);
+  } catch (error) {
+    console.error('Failed to log guarded chat query:', error);
+  }
+}
+
+async function logChatEvent(eventType: 'rate_limited' | 'api_error', metadata: Record<string, unknown> = {}): Promise<void> {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
+    const { error } = await getSupabaseClient().from('chat_events').insert({ event_type: eventType, metadata });
+    if (error) console.error(`Failed to log ${eventType} event:`, error.message);
+  } catch (error) {
+    console.error(`Failed to log ${eventType} event:`, error);
   }
 }

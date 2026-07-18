@@ -14,6 +14,7 @@ type ChatResponse = {
   answer: string;
   sources: Source[];
   fallback_triggered: boolean;
+  query_id?: string;
 };
 
 type Message = {
@@ -90,6 +91,9 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
     setQuestion("");
     setError("");
     setIsLoading(true);
+    // Measured in the click/submit handler, outside React render state.
+    // eslint-disable-next-line react-hooks/purity
+    const requestStartedAt = performance.now();
 
     try {
       const response = await fetch("/api/chat", {
@@ -104,6 +108,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
       }
 
       const contentType = response.headers.get("content-type") || "";
+      const responseQueryId = response.headers.get("x-query-id") || "";
       if (contentType.includes("application/json")) {
         const payload = await response.json() as ChatResponse;
         const assistantMessage: Message = {
@@ -115,6 +120,9 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
         };
 
         setMessages((currentMessages) => [...currentMessages, assistantMessage]);
+        // eslint-disable-next-line react-hooks/purity
+        const completedAt = performance.now();
+        recordTelemetry(payload.query_id || responseQueryId, requestStartedAt, completedAt, completedAt);
         return;
       }
 
@@ -127,6 +135,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
       const decoder = new TextDecoder();
       streamedAnswerRef.current = "";
       hasFirstTokenRef.current = false;
+      let firstTokenAt = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -138,6 +147,8 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
         streamedAnswerRef.current += token;
 
         if (!hasFirstTokenRef.current) {
+          // eslint-disable-next-line react-hooks/purity
+          firstTokenAt = performance.now();
           hasFirstTokenRef.current = true;
           setIsLoading(false);
           setMessages((currentMessages) => [
@@ -162,6 +173,10 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
       if (!hasFirstTokenRef.current) {
         throw new Error("Empty response");
       }
+
+      // eslint-disable-next-line react-hooks/purity
+      const completedAt = performance.now();
+      recordTelemetry(responseQueryId, requestStartedAt, firstTokenAt, completedAt);
     } catch (requestError) {
       setError(
         requestError instanceof Error && requestError.message.includes("characters or fewer")
@@ -328,12 +343,24 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
           aria-expanded={isOpen}
           aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
         >
-          <span className="flex size-7 items-center justify-center rounded-full bg-white/20 text-base">
-            ?
-          </span>
           {isOpen ? "Close" : "Questions?"}
         </button>
       ) : null}
     </div>
   );
+}
+
+function recordTelemetry(queryId: string, requestStartedAt: number, firstTokenAt: number, completedAt: number): void {
+  if (!queryId) return;
+
+  void fetch("/api/chat/telemetry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query_id: queryId,
+      time_to_first_token_ms: Math.round(firstTokenAt - requestStartedAt),
+      total_response_time_ms: Math.round(completedAt - requestStartedAt),
+    }),
+    keepalive: true,
+  }).catch(() => undefined);
 }

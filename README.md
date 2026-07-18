@@ -89,7 +89,7 @@ Query logged to Supabase (question, chunks, scores, answer)
    ```bash
    cp .env.example .env.local
    ```
-   Fill in:
+Fill in:
    ```env
    OPENAI_API_KEY=
    NEXT_PUBLIC_SUPABASE_URL=
@@ -97,11 +97,17 @@ Query logged to Supabase (question, chunks, scores, answer)
    MIN_SIMILARITY_THRESHOLD=0.25
    BASE_SITE_URL=https://thewellaustin.com
    ESCALATION_CONTACT=
+   KV_REST_API_URL=
+   KV_REST_API_TOKEN=
+   ADMIN_DASHBOARD_USERNAME=
+   ADMIN_DASHBOARD_PASSWORD=
    ```
 
 3. **Initialize database**
 
    Run `db/schema.sql` in the Supabase SQL editor. This creates the `documents` table, `query_logs` table, and `match_documents` RPC function.
+
+   Existing deployments should run `db/dashboard-migration.sql` once to add dashboard telemetry fields and lock analytics tables to the service role.
 
 4. **Ingest content**
    ```bash
@@ -170,3 +176,13 @@ See `wordpress/README.md` for Elementor Custom Code and plugin installation opti
 | `MIN_SIMILARITY_THRESHOLD` | Minimum cosine similarity to return results (default: `0.25`) |
 | `BASE_SITE_URL` | Base URL for resolving relative paths during ingestion |
 | `ESCALATION_CONTACT` | Contact info injected into fallback and pastoral responses |
+| `KV_REST_API_URL` | Upstash Redis REST URL used for global rate limiting and answer caching |
+| `KV_REST_API_TOKEN` | Upstash Redis REST token; server-side only |
+| `ADMIN_DASHBOARD_USERNAME` | HTTP Basic username protecting `/admin` |
+| `ADMIN_DASHBOARD_PASSWORD` | Strong HTTP Basic password protecting `/admin`; server-side only |
+
+## Operations Dashboard
+
+The authenticated dashboard at `/admin` reports query volume, fallback and escalation rates, retrieval sources, API errors, rate-limit activity, and browser-measured response latency. It also includes searchable raw visitor questions and generated answers for product and pastoral-support planning.
+
+Because visitor questions can contain sensitive information, use a unique 24+ character dashboard password, share access narrowly, and never expose the Supabase service role key to the browser. Dashboard analytics retain up to 90 days in the view; configure a database retention policy separately if older records should be deleted.

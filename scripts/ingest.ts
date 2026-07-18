@@ -270,7 +270,7 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   }
 
   const payload = await response.json();
-  return payload.data.map((item: any) => item.embedding as number[]);
+  return payload.data.map((item: { embedding: number[] }) => item.embedding);
 }
 
 async function deleteExistingRows(url: string): Promise<void> {
