@@ -1,13 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import { MatchDocument, rerankChunks } from '@/lib/retrieval';
+import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MIN_SIMILARITY_THRESHOLD = Number(process.env.MIN_SIMILARITY_THRESHOLD ?? '0.25');
 const ESCALATION_CONTACT = process.env.ESCALATION_CONTACT || 'The Well directly';
+const MAX_QUESTION_LENGTH = 1000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
+const SUGGESTED_ANSWER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const RATE_LIMIT_REDIS_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)?.replace(/\/+$/, '');
 const RATE_LIMIT_REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const RATE_LIMIT_SCRIPT = `
@@ -162,6 +165,20 @@ async function checkRateLimit(ip: string): Promise<RateLimitResult> {
   };
 }
 
+async function getCachedAnswer(cacheKey: string): Promise<string | null> {
+  return redisCommand<string | null>(['GET', `chat-answer:${cacheKey}`]);
+}
+
+async function setCachedAnswer(cacheKey: string, answer: string): Promise<void> {
+  await redisCommand<string>([
+    'SET',
+    `chat-answer:${cacheKey}`,
+    answer,
+    'EX',
+    SUGGESTED_ANSWER_CACHE_TTL_SECONDS,
+  ]);
+}
+
 function getSupabaseClient() {
   if (!supabaseClient) {
     supabaseClient = createSupabaseClient();
@@ -239,10 +256,34 @@ ${context}
 Answer using only the retrieved context. Include source URLs used in the answer.`;
 }
 
+function cachedAnswerResponse(answer: string, logQuery: (answer: string) => Promise<void>): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(encoder.encode(answer));
+      controller.close();
+
+      try {
+        await logQuery(answer);
+      } catch (error) {
+        console.error('Failed to log cached chat query:', error);
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Chat-Cache': 'HIT',
+    },
+  });
+}
+
 async function streamAnswer(
   question: string,
   chunks: MatchDocument[],
-  logQuery: (answer: string) => Promise<void>
+  completeAnswer: (answer: string) => Promise<void>
 ): Promise<Response> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -305,9 +346,9 @@ async function streamAnswer(
         controller.close();
 
         try {
-          await logQuery(answer.trim() || FALLBACK_ANSWER);
+          await completeAnswer(answer.trim() || FALLBACK_ANSWER);
         } catch (error) {
-          console.error('Failed to log streamed chat query:', error);
+          console.error('Failed to finalize streamed chat query:', error);
         }
       } catch (error) {
         controller.error(error);
@@ -319,6 +360,7 @@ async function streamAnswer(
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'no-cache',
+      'X-Chat-Cache': 'MISS',
     },
   });
 }
@@ -350,6 +392,13 @@ export async function POST(request: Request) {
       return Response.json({ error: 'question is required' }, { status: 400 });
     }
 
+    if (question.length > MAX_QUESTION_LENGTH) {
+      return Response.json(
+        { error: `question must be ${MAX_QUESTION_LENGTH} characters or fewer` },
+        { status: 400 }
+      );
+    }
+
     if (includesKeyword(question, CRISIS_KEYWORDS)) {
       return Response.json({ answer: CRISIS_ANSWER, sources: [], fallback_triggered: true });
     }
@@ -357,6 +406,31 @@ export async function POST(request: Request) {
     assertEnv();
 
     const supabase = getSupabaseClient();
+    const suggestedAnswerCacheKey = getSuggestedAnswerCacheKey(question);
+    const cachedAnswer = suggestedAnswerCacheKey
+      ? await getCachedAnswer(suggestedAnswerCacheKey)
+      : null;
+
+    if (cachedAnswer) {
+      const logCachedQuery = async (answer: string) => {
+        const { error: logError } = await supabase.from('query_logs').insert({
+          question,
+          retrieved_chunk_ids: [],
+          retrieved_urls: [],
+          retrieved_titles: [],
+          similarity_scores: [],
+          answer,
+          fallback_triggered: false,
+        });
+
+        if (logError) {
+          console.error('Failed to log cached chat query:', logError.message);
+        }
+      };
+
+      return cachedAnswerResponse(cachedAnswer, logCachedQuery);
+    }
+
     const questionEmbedding = await embedQuestion(question);
     const { data, error } = await supabase.rpc('match_documents', {
       query_embedding: questionEmbedding,
@@ -387,7 +461,21 @@ export async function POST(request: Request) {
     };
 
     if (!fallbackTriggered) {
-      return streamAnswer(question, chunks, logQuery);
+      const completeAnswer = async (answer: string) => {
+        const tasks: Promise<unknown>[] = [logQuery(answer)];
+        if (suggestedAnswerCacheKey) {
+          tasks.push(setCachedAnswer(suggestedAnswerCacheKey, answer));
+        }
+
+        const results = await Promise.allSettled(tasks);
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            console.error('Failed to finalize chat answer:', result.reason);
+          }
+        }
+      };
+
+      return streamAnswer(question, chunks, completeAnswer);
     }
 
     const answer = includesKeyword(question, PASTORAL_KEYWORDS) ? PASTORAL_FALLBACK_ANSWER : FALLBACK_ANSWER;

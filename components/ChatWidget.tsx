@@ -3,6 +3,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
+import { CHAT_SUGGESTIONS } from "@/lib/chat-suggestions";
 
 type Source = {
   title: string;
@@ -27,19 +28,14 @@ type ChatWidgetProps = {
   embedded?: boolean;
 };
 
+const MAX_QUESTION_LENGTH = 1000;
+
 const starterMessage: Message = {
   id: "welcome",
   role: "assistant",
   content: "Hey there! I'm Droplet, here to answer any questions you may have about the Well. How can I help?",
   sources: [],
 };
-
-const suggestedQuestions = [
-  "When are Sunday services?",
-  "What does The Well believe?",
-  "How can I join a community group?",
-  "How can I serve or volunteer?",
-];
 
 export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -52,7 +48,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
   const messageSequenceRef = useRef(0);
   const streamedAnswerRef = useRef("");
   const hasFirstTokenRef = useRef(false);
-  const visibleSuggestions = suggestedQuestions
+  const visibleSuggestions = CHAT_SUGGESTIONS
     .filter((suggestedQuestion) => !askedSuggestions.includes(suggestedQuestion))
     .slice(0, 3);
 
@@ -103,7 +99,8 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Request failed");
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || "Request failed");
       }
 
       const contentType = response.headers.get("content-type") || "";
@@ -165,8 +162,12 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
       if (!hasFirstTokenRef.current) {
         throw new Error("Empty response");
       }
-    } catch {
-      setError("We could not send that message. Please try again.");
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error && requestError.message.includes("characters or fewer")
+          ? `Please keep your question under ${MAX_QUESTION_LENGTH.toLocaleString()} characters.`
+          : "We could not send that message. Please try again."
+      );
     } finally {
       setIsLoading(false);
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -198,17 +199,9 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
           className="flex h-[min(680px,calc(100vh-2rem))] w-full flex-col overflow-hidden rounded-[1.35rem] border border-[#cfe5df] bg-[#fbfdfb] shadow-[0_24px_70px_rgba(11,64,58,0.2)] max-[440px]:h-[calc(100vh-2rem)] sm:w-[410px]"
         >
           <header className="flex items-center justify-between gap-4 border-b border-[#d9ebe6] bg-[#f3faf7] px-5 py-4">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-full bg-[#00B5A3] text-sm font-semibold text-white">
-                TW
-              </div>
-              <div>
-                <h2 className="text-sm font-semibold tracking-[0.01em] text-[#123f39]">
-                  Droplet
-                </h2>
-                <p className="text-xs text-[#53746d]">The Well website guide</p>
-              </div>
-            </div>
+            <h2 className="text-sm font-semibold tracking-[0.01em] text-[#123f39]">
+              Droplet
+            </h2>
             <button
               type="button"
               onClick={() => setIsOpen(false)}
@@ -305,6 +298,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={handleKeyDown}
+                maxLength={MAX_QUESTION_LENGTH}
                 rows={1}
                 placeholder="Ask about Sundays, serving, giving..."
                 className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-[#cfe5df] bg-[#fbfdfb] px-4 py-3 text-sm leading-5 text-[#173f39] outline-none transition placeholder:text-[#7d9a94] focus:border-[#00B5A3] focus:ring-2 focus:ring-[#b8eee7]"
@@ -317,6 +311,11 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
                 Send
               </button>
             </div>
+            {question.length >= MAX_QUESTION_LENGTH * 0.8 ? (
+              <p className="mt-1.5 pr-1 text-right text-[11px] text-[#66857f]">
+                {question.length.toLocaleString()} / {MAX_QUESTION_LENGTH.toLocaleString()}
+              </p>
+            ) : null}
           </form>
         </section>
       ) : null}
@@ -332,7 +331,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
           <span className="flex size-7 items-center justify-center rounded-full bg-white/20 text-base">
             ?
           </span>
-          {isOpen ? "Close" : "Ask The Well"}
+          {isOpen ? "Close" : "Questions?"}
         </button>
       ) : null}
     </div>
