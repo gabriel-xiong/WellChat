@@ -18,9 +18,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
+          set -o pipefail
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run requested; ingestion is due."
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          SUPABASE_URL=$(printf '%s' "$SUPABASE_URL" | tr -d '\r\n[:space:]')
+          SUPABASE_URL=${SUPABASE_URL%/}
+
+          if [[ ! "$SUPABASE_URL" =~ ^https:// ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_URL is not a valid HTTPS URL. Check the GitHub Actions secret."
+            exit 1
           fi
 
           latest=$(curl -fsS \
@@ -30,16 +41,20 @@ jobs:
             jq -r '.[0].last_indexed_at // empty')
 
           if [ -z "$latest" ]; then
+            echo "No indexed documents found; ingestion is due."
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "Latest document index: $latest"
           now=$(date +%s)
           last=$(date -d "$latest" +%s)
 
           if [ $((now - last)) -ge 432000 ]; then
+            echo "Latest index is at least five days old; ingestion is due."
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
+            echo "Latest index is less than five days old; skipping ingestion."
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
