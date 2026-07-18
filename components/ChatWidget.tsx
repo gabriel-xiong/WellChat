@@ -339,7 +339,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
         <button
           type="button"
           onClick={() => setIsOpen((current) => !current)}
-          className="flex h-16 items-center rounded-full bg-[#00B5A3] px-6 text-base font-semibold text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
+          className="flex h-[4.5rem] items-center rounded-full bg-[#00B5A3] px-7 text-lg font-semibold text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
           aria-expanded={isOpen}
           aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
         >

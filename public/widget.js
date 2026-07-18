@@ -5,8 +5,8 @@
   var MESSAGE_SOURCE = "the-well-widget";
   var DESKTOP_WIDTH = 460;
   var DESKTOP_HEIGHT = 720;
-  var COLLAPSED_WIDTH = 210;
-  var COLLAPSED_HEIGHT = 96;
+  var COLLAPSED_WIDTH = 240;
+  var COLLAPSED_HEIGHT = 112;
 
   if (document.getElementById(FRAME_ID)) return;
 

@@ -1,8 +1,8 @@
 export const CHAT_SUGGESTIONS = [
   "When are Sunday services?",
   "What does The Well believe?",
-  "How can I join a community group?",
   "What events are happening this month?",
+  "How can I join a community group?",
 ] as const;
 
 const CACHE_KEYS = new Map<string, string>([
