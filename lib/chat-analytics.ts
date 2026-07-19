@@ -15,8 +15,8 @@ export const CHAT_CATEGORIES = [
 export type ChatCategory = (typeof CHAT_CATEGORIES)[number];
 
 const CATEGORY_KEYWORDS: Array<[ChatCategory, string[]]> = [
-  ["crisis", ["hurt myself", "kill myself", "suicide", "end my life", "self-harm", "hurting myself", "want to die"]],
-  ["pastoral", ["spiritual advice", "pray for me", "need to talk", "need someone to talk to", "struggling", "counseling", "personal", "going through something"]],
+  ["crisis", ["harm myself", "harming myself", "hurt myself", "kill myself", "suicide", "suicidal", "end my life", "take my own life", "self-harm", "self harm", "hurting myself", "want to die", "don't want to live", "dont want to live"]],
+  ["pastoral", ["pastoral care", "spiritual advice", "pray for me", "need prayer", "need to talk", "need someone to talk to", "talk to someone", "struggling", "counseling", "personal", "going through something"]],
   ["events", ["event", "happening", "calendar", "this month", "this week"]],
   ["sundays", ["sunday", "service", "church start", "location", "visit"]],
   ["community", ["community group", "small group", "join a group"]],

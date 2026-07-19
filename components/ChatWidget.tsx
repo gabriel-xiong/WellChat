@@ -34,7 +34,7 @@ const MAX_QUESTION_LENGTH = 1000;
 const starterMessage: Message = {
   id: "welcome",
   role: "assistant",
-  content: "Hey there! I'm Droplet, here to answer any questions you may have about the Well. How can I help?",
+  content: "Hi! I'm Welly, here to answer any questions you may have about The Well. How can I help?",
   sources: [],
 };
 
@@ -215,7 +215,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
         >
           <header className="flex items-center justify-between gap-4 border-b border-[#d9ebe6] bg-[#f3faf7] px-5 py-4">
             <h2 className="text-sm font-semibold tracking-[0.01em] text-[#123f39]">
-              Droplet
+              Welly
             </h2>
             <button
               type="button"
@@ -236,9 +236,9 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
                 {message.role === "assistant" ? (
                   <div className="relative z-10 mr-0.5 flex h-9 w-8 shrink-0 items-end justify-center overflow-visible">
                     <Image
-                      src="/raindrop-avatar.svg"
-                      alt="Droplet"
-                      width={28}
+                      src="/welly.svg"
+                      alt="Welly"
+                      width={32}
                       height={32}
                       className="h-8 w-auto object-contain"
                     />

@@ -69,19 +69,29 @@ const FALLBACK_ANSWER = `I can't answer that based on what I know. Please contac
 const CRISIS_ANSWER = `If you are in crisis or having thoughts of harming yourself, please call 911 or the 988 Suicide and Crisis Lifeline (call or text 988) immediately. You can also reach out to our team at ${ESCALATION_CONTACT}.`;
 const PASTORAL_FALLBACK_ANSWER = `It sounds like you may be looking for personal support. We'd encourage you to reach out to our team directly — we'd love to connect you with someone who can help. Contact us at ${ESCALATION_CONTACT}.`;
 const CRISIS_KEYWORDS = [
+  'harm myself',
+  'harming myself',
   'hurt myself',
   'kill myself',
   'suicide',
+  'suicidal',
   'end my life',
+  'take my own life',
   'self-harm',
+  'self harm',
   'hurting myself',
   'want to die',
+  "don't want to live",
+  'dont want to live',
 ];
 const PASTORAL_KEYWORDS = [
+  'pastoral care',
   'spiritual advice',
   'pray for me',
+  'need prayer',
   'need to talk',
   'need someone to talk to',
+  'talk to someone',
   'struggling',
   'counseling',
   'personal',
@@ -262,7 +272,15 @@ function cachedAnswerResponse(answer: string, queryId: string, logQuery: (answer
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      controller.enqueue(encoder.encode(answer));
+      const words = answer.match(/\S+\s*/g) ?? [answer];
+      const wordsPerChunk = 3;
+
+      for (let index = 0; index < words.length; index += wordsPerChunk) {
+        controller.enqueue(encoder.encode(words.slice(index, index + wordsPerChunk).join('')));
+        if (index + wordsPerChunk < words.length) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      }
       controller.close();
 
       try {
