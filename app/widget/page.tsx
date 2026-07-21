@@ -10,11 +10,17 @@ export const metadata: Metadata = {
   },
 };
 
-export default function WidgetPage() {
+export default async function WidgetPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ compact?: string }>;
+}) {
+  const { compact } = await searchParams;
+
   return (
     <main className="fixed inset-0 overflow-hidden bg-transparent" aria-label="The Well website assistant">
       <style>{`html, body { background: transparent !important; overflow: hidden; color-scheme: light; }`}</style>
-      <ChatWidget embedded />
+      <ChatWidget embedded compactLauncher={compact === "1"} />
     </main>
   );
 }

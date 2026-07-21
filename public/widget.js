@@ -22,7 +22,8 @@
 
   iframe.id = FRAME_ID;
   iframe.src = widgetOrigin + "/widget?site=" + encodeURIComponent(site) +
-    "&parentOrigin=" + encodeURIComponent(window.location.origin);
+    "&parentOrigin=" + encodeURIComponent(window.location.origin) +
+    "&compact=" + (window.innerWidth <= 640 ? "1" : "0");
   iframe.title = "The Well website assistant";
   iframe.setAttribute("aria-label", "The Well website assistant");
   iframe.setAttribute("loading", "eager");
@@ -63,11 +64,25 @@
     resizeFrame(Boolean(event.data.open));
   }
 
+  function notifyViewport() {
+    if (!iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      {
+        source: MESSAGE_SOURCE,
+        type: "viewport",
+        compact: window.innerWidth <= 640,
+      },
+      widgetOrigin
+    );
+  }
+
   function mountWidget() {
     document.body.appendChild(iframe);
+    iframe.addEventListener("load", notifyViewport);
     window.addEventListener("message", handleMessage);
     window.addEventListener("resize", function () {
       resizeFrame(isOpen);
+      notifyViewport();
     });
   }
 

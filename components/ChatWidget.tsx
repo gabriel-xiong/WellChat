@@ -27,6 +27,7 @@ type Message = {
 
 type ChatWidgetProps = {
   embedded?: boolean;
+  compactLauncher?: boolean;
 };
 
 const MAX_QUESTION_LENGTH = 1000;
@@ -38,13 +39,14 @@ const starterMessage: Message = {
   sources: [],
 };
 
-export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
+export default function ChatWidget({ embedded = false, compactLauncher = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([starterMessage]);
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [askedSuggestions, setAskedSuggestions] = useState<string[]>([]);
+  const [isCompactLauncher, setIsCompactLauncher] = useState(compactLauncher);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messageSequenceRef = useRef(0);
   const streamedAnswerRef = useRef("");
@@ -62,6 +64,14 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
 
     if (!parentOrigin) return;
 
+    const handleParentMessage = (event: MessageEvent) => {
+      if (event.origin !== parentOrigin || event.source !== window.parent) return;
+      if (event.data?.source !== "the-well-widget" || event.data?.type !== "viewport") return;
+      setIsCompactLauncher(Boolean(event.data.compact));
+    };
+
+    window.addEventListener("message", handleParentMessage);
+
     window.parent.postMessage(
       {
         source: "the-well-widget",
@@ -70,6 +80,8 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
       },
       parentOrigin
     );
+
+    return () => window.removeEventListener("message", handleParentMessage);
   }, [embedded, isOpen]);
 
   function createMessageId(role: Message["role"]): string {
@@ -339,12 +351,14 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
         <button
           type="button"
           onClick={() => setIsOpen((current) => !current)}
-          className="flex size-14 items-center justify-center rounded-full bg-[#00B5A3] text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2 sm:h-[4.5rem] sm:w-auto sm:px-7 sm:text-lg sm:font-semibold"
+          className={`flex items-center justify-center rounded-full bg-[#00B5A3] text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2 ${
+            isCompactLauncher ? "size-14" : "h-[4.5rem] px-7 text-lg font-semibold"
+          }`}
           aria-expanded={isOpen}
           aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
           title={isOpen ? "Close chat" : "Ask a question"}
         >
-          <span className="sm:hidden" aria-hidden="true">
+          {isCompactLauncher ? <span aria-hidden="true">
             {isOpen ? (
               <svg viewBox="0 0 24 24" className="size-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M6 6l12 12M18 6L6 18" />
@@ -354,8 +368,7 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
                 <path d="M4 2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7l-5 4V4a2 2 0 0 1 2-2Zm8 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm0-10a4 4 0 0 0-4 4h2a2 2 0 1 1 2.35 1.97A1.65 1.65 0 0 0 11 12.6V13h2v-.4c0-.22.15-.42.37-.47A4 4 0 0 0 12 5Z" />
               </svg>
             )}
-          </span>
-          <span className="hidden sm:inline">{isOpen ? "Close" : "Questions?"}</span>
+          </span> : <span>{isOpen ? "Close" : "Questions?"}</span>}
         </button>
       ) : null}
     </div>
