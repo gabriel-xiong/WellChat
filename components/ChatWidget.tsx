@@ -339,11 +339,23 @@ export default function ChatWidget({ embedded = false }: ChatWidgetProps) {
         <button
           type="button"
           onClick={() => setIsOpen((current) => !current)}
-          className="flex h-[4.5rem] items-center rounded-full bg-[#00B5A3] px-7 text-lg font-semibold text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2"
+          className="flex size-14 items-center justify-center rounded-full bg-[#00B5A3] text-white shadow-[0_14px_34px_rgba(0,127,115,0.28)] transition hover:bg-[#009989] focus:outline-none focus:ring-2 focus:ring-[#00B5A3] focus:ring-offset-2 sm:h-[4.5rem] sm:w-auto sm:px-7 sm:text-lg sm:font-semibold"
           aria-expanded={isOpen}
           aria-label={isOpen ? "Close The Well chat" : "Open The Well chat"}
+          title={isOpen ? "Close chat" : "Ask a question"}
         >
-          {isOpen ? "Close" : "Questions?"}
+          <span className="sm:hidden" aria-hidden="true">
+            {isOpen ? (
+              <svg viewBox="0 0 24 24" className="size-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" className="size-7" fill="currentColor">
+                <path d="M4 2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7l-5 4V4a2 2 0 0 1 2-2Zm8 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm0-10a4 4 0 0 0-4 4h2a2 2 0 1 1 2.35 1.97A1.65 1.65 0 0 0 11 12.6V13h2v-.4c0-.22.15-.42.37-.47A4 4 0 0 0 12 5Z" />
+              </svg>
+            )}
+          </span>
+          <span className="hidden sm:inline">{isOpen ? "Close" : "Questions?"}</span>
         </button>
       ) : null}
     </div>

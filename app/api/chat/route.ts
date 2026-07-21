@@ -273,12 +273,12 @@ function cachedAnswerResponse(answer: string, queryId: string, logQuery: (answer
   const stream = new ReadableStream({
     async start(controller) {
       const words = answer.match(/\S+\s*/g) ?? [answer];
-      const wordsPerChunk = 3;
+      const wordsPerChunk = 1;
 
       for (let index = 0; index < words.length; index += wordsPerChunk) {
         controller.enqueue(encoder.encode(words.slice(index, index + wordsPerChunk).join('')));
         if (index + wordsPerChunk < words.length) {
-          await new Promise((resolve) => setTimeout(resolve, 20));
+          await new Promise((resolve) => setTimeout(resolve, 45));
         }
       }
       controller.close();

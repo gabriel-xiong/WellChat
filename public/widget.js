@@ -5,8 +5,9 @@
   var MESSAGE_SOURCE = "the-well-widget";
   var DESKTOP_WIDTH = 460;
   var DESKTOP_HEIGHT = 720;
-  var COLLAPSED_WIDTH = 240;
-  var COLLAPSED_HEIGHT = 112;
+  var DESKTOP_COLLAPSED_WIDTH = 240;
+  var DESKTOP_COLLAPSED_HEIGHT = 112;
+  var MOBILE_COLLAPSED_SIZE = 88;
 
   if (document.getElementById(FRAME_ID)) return;
 
@@ -33,8 +34,8 @@
   iframe.style.position = "fixed";
   iframe.style.right = "0";
   iframe.style.bottom = "0";
-  iframe.style.width = COLLAPSED_WIDTH + "px";
-  iframe.style.height = COLLAPSED_HEIGHT + "px";
+  iframe.style.width = (window.innerWidth <= 640 ? MOBILE_COLLAPSED_SIZE : DESKTOP_COLLAPSED_WIDTH) + "px";
+  iframe.style.height = (window.innerWidth <= 640 ? MOBILE_COLLAPSED_SIZE : DESKTOP_COLLAPSED_HEIGHT) + "px";
   iframe.style.border = "0";
   iframe.style.background = "transparent";
   iframe.style.zIndex = "2147483000";
@@ -44,8 +45,9 @@
     isOpen = open;
 
     if (!open) {
-      iframe.style.width = COLLAPSED_WIDTH + "px";
-      iframe.style.height = COLLAPSED_HEIGHT + "px";
+      var isMobile = window.innerWidth <= 640;
+      iframe.style.width = (isMobile ? MOBILE_COLLAPSED_SIZE : DESKTOP_COLLAPSED_WIDTH) + "px";
+      iframe.style.height = (isMobile ? MOBILE_COLLAPSED_SIZE : DESKTOP_COLLAPSED_HEIGHT) + "px";
       return;
     }
 
