@@ -11,7 +11,7 @@ Sensitive queries (pastoral care, crisis/self-harm) are handled with dedicated g
 
 ## Demo
 
-Live deployment: https://the-well-rag-agent.vercel.app
+Live deployment: https://thewellaustin.com/ 
 
 ## Stack
 
