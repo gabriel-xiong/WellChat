@@ -1,0 +1,35 @@
+{
+  "sitemapIndex": "/wp-sitemap.xml",
+  "sitemaps": [
+    { "name": "page-sitemap.xml", "contentType": "page", "refreshHours": 168, "depth": "deep" },
+    { "name": "staff-sitemap.xml", "contentType": "staff", "refreshHours": 168, "depth": "deep" },
+    { "name": "events-sitemap.xml", "contentType": "event", "refreshHours": 24, "depth": "deep" },
+    { "name": "resources-sitemap.xml", "contentType": "resource", "refreshHours": 168, "depth": "deep" },
+    { "name": "sermons-sitemap.xml", "contentType": "sermon", "refreshHours": 168, "depth": "deep" },
+    { "name": "stories-sitemap.xml", "contentType": "story", "refreshHours": 168, "depth": "deep" },
+    { "name": "communitygroups-sitemap.xml", "contentType": "community_group", "refreshHours": 168, "depth": "deep" },
+    { "name": "wellsaidpodcast-sitemap.xml", "contentType": "podcast", "refreshHours": 168, "depth": "deep" },
+    { "name": "impactreports-sitemap.xml", "contentType": "impact_report", "refreshHours": 720, "depth": "deep" },
+    { "name": "visionfunds-sitemap.xml", "contentType": "vision_fund", "refreshHours": 168, "depth": "deep" },
+    { "name": "jobs-sitemap.xml", "contentType": "job", "refreshHours": 24, "depth": "deep" },
+    { "name": "retreatevents-sitemap.xml", "contentType": "retreat", "refreshHours": 24, "depth": "deep" },
+    { "name": "celebrationsunday-sitemap.xml", "contentType": "event", "refreshHours": 24, "depth": "deep" },
+    { "name": "articleseries-sitemap.xml", "contentType": "resource", "refreshHours": 168, "depth": "deep" },
+    { "name": "videoseries-sitemap.xml", "contentType": "resource", "refreshHours": 168, "depth": "deep" },
+    { "name": "devotional-sitemap.xml", "contentType": "resource", "refreshHours": 168, "depth": "deep" }
+  ],
+  "urlPolicies": [
+    { "pattern": "^/sundays/?$", "refreshHours": 24, "contentType": "sundays" },
+    { "pattern": "^/events(?:/|$)", "refreshHours": 24, "contentType": "event" },
+    { "pattern": "^/retreats(?:/|$)", "refreshHours": 24, "contentType": "retreat" },
+    { "pattern": "^/jobs(?:/|$)", "refreshHours": 24, "contentType": "job" },
+    { "pattern": "^/(?:team|community)(?:/|$)", "refreshHours": 168 },
+    { "pattern": "^/(?:ministries|giving|residency|residencies|missions|trips|pre-marriage)(?:/|$)", "refreshHours": 168 },
+    { "pattern": "^/(?:beliefs|mission|planting)(?:/|$)", "refreshHours": 720 }
+  ],
+  "excludePatterns": [
+    "^/search-",
+    "^/resources-old/?$",
+    "^/links/?$"
+  ]
+}

@@ -7,9 +7,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "tsx --test scripts/ingestion-core.test.ts scripts/ingestion-pipeline.test.ts",
+    "test:ingestion:live": "tsx --test scripts/ingestion-live.test.ts",
     "ingest": "dotenv -e .env.local -- tsx scripts/ingest.ts",
+    "ingest:discover": "dotenv -e .env.local -- tsx scripts/ingest.ts --discovery-only",
+    "ingest:audit": "dotenv -e .env.local -- tsx scripts/audit-ingestion-content.ts",
     "benchmark:latency": "dotenv -e .env.local -- tsx scripts/benchmark-latency.ts",
-    "benchmark:retrieval": "dotenv -e .env.local -- tsx scripts/benchmark-retrieval.ts"
+    "benchmark:retrieval": "dotenv -e .env.local -- tsx scripts/benchmark-retrieval.ts",
+    "benchmark:rag": "dotenv -e .env.local -- tsx scripts/benchmark-rag.ts",
+    "benchmark:rag:keyless": "python scripts/benchmark-rag-keyless.py"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",

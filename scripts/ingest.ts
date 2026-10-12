@@ -1,374 +1,442 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  addRetrievalSummary,
+  applyUrlPolicy,
+  buildChunks,
+  canonicalizeUrl,
+  contentHash,
+  DiscoveredSource,
+  extractEventEndDate,
+  extractTitle,
+  htmlToText,
+  IngestionConfig,
+  isEventExpired,
+  isNoIndexPage,
+  isPageDue,
+  PageChunk,
+  parseSitemapEntries,
+  resolveSitemapPolicy,
+  shouldEmbedPage,
+  summaryForSource,
+} from './ingestion-core';
 
-const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CONFIG_FILE = process.env.INGESTION_CONFIG_FILE
+  ? path.resolve(process.env.INGESTION_CONFIG_FILE)
+  : path.resolve(SCRIPT_DIR, '../ingestion-config.json');
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const BASE_SITE_URL = process.env.BASE_SITE_URL?.replace(/\/+$/, '');
-const APPROVED_PAGES_FILE = path.resolve(ROOT_DIR, '../approved-pages.json');
+const OPENAI_EMBEDDINGS_URL = process.env.OPENAI_EMBEDDINGS_URL ?? 'https://api.openai.com/v1/embeddings';
+const FETCH_TIMEOUT_MS = 30_000;
+const FETCH_ATTEMPTS = 3;
 
-export type Depth = 'deep' | 'shallow';
-export interface ApprovedPageConfig {
+interface StoredDocument {
+  id: string;
   url: string;
-  depth: Depth;
-}
-
-interface PageChunk {
-  url: string;
-  title: string;
-  section: string;
+  title: string | null;
+  section: string | null;
   content: string;
-  depth: Depth;
-  content_type: string;
-  embedding?: number[];
+  depth: string | null;
+  content_type: string | null;
+  last_indexed_at: string;
 }
 
-function assertEnv(): void {
+interface RunOptions {
+  dryRun: boolean;
+  discoveryOnly: boolean;
+  forceCheck: boolean;
+  forceEmbed: boolean;
+  limit: number | null;
+}
+
+interface DiscoveryResult {
+  sources: Map<string, DiscoveredSource>;
+  successfulSitemaps: Set<string>;
+  failedSitemaps: string[];
+  ignoredSitemaps: string[];
+}
+
+interface RunStats {
+  discovered: number;
+  due: number;
+  checked: number;
+  unchanged: number;
+  indexed: number;
+  excluded: number;
+  expired: number;
+  failed: number;
+  embeddedTokensApproximation: number;
+}
+
+class NonRetryableFetchError extends Error {}
+
+function parseOptions(argv: string[]): RunOptions {
+  const limitArgument = argv.find((argument) => argument.startsWith('--limit='));
+  const parsedLimit = limitArgument ? Number(limitArgument.split('=', 2)[1]) : null;
+  if (parsedLimit !== null && (!Number.isInteger(parsedLimit) || parsedLimit < 1)) {
+    throw new Error('--limit must be a positive integer.');
+  }
+  return {
+    dryRun: argv.includes('--dry-run'),
+    discoveryOnly: argv.includes('--discovery-only'),
+    forceCheck: argv.includes('--force-check') || argv.includes('--force-embed'),
+    forceEmbed: argv.includes('--force-embed'),
+    limit: parsedLimit,
+  };
+}
+
+function assertEnvironment(options: RunOptions): void {
+  if (!BASE_SITE_URL) throw new Error('BASE_SITE_URL is required.');
+  if (options.discoveryOnly) return;
   if (!SUPABASE_URL) throw new Error('NEXT_PUBLIC_SUPABASE_URL is required.');
   if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required.');
-  if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required.');
-  if (!BASE_SITE_URL) throw new Error('BASE_SITE_URL is required.');
+  if (!options.dryRun && !OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required.');
 }
 
-function loadApprovedPages(): ApprovedPageConfig[] {
-  if (fs.existsSync(APPROVED_PAGES_FILE)) {
-    const raw = fs.readFileSync(APPROVED_PAGES_FILE, 'utf-8');
-    const parsed = JSON.parse(raw) as ApprovedPageConfig[];
-    if (!Array.isArray(parsed)) {
-      throw new Error(`${APPROVED_PAGES_FILE} must contain an array of approved pages.`);
-    }
-    return parsed;
+function loadConfig(): IngestionConfig {
+  const raw = process.env.INGESTION_CONFIG_JSON ?? fs.readFileSync(CONFIG_FILE, 'utf8');
+  const parsed = JSON.parse(raw) as IngestionConfig;
+  if (!parsed.sitemapIndex || !Array.isArray(parsed.sitemaps) || !parsed.sitemaps.length) {
+    throw new Error(`${CONFIG_FILE} must define sitemapIndex and at least one sitemap policy.`);
   }
-
-  const envJson = process.env.APPROVED_PAGES_JSON;
-  if (envJson) {
-    const parsed = JSON.parse(envJson) as ApprovedPageConfig[];
-    if (!Array.isArray(parsed)) {
-      throw new Error('APPROVED_PAGES_JSON must be a JSON array of approved pages.');
-    }
-    return parsed;
+  const names = new Set<string>();
+  for (const sitemap of parsed.sitemaps) {
+    if (!sitemap.name || names.has(sitemap.name)) throw new Error(`Duplicate or empty sitemap policy: ${sitemap.name}`);
+    if (!Number.isFinite(sitemap.refreshHours) || sitemap.refreshHours < 1) throw new Error(`Invalid refreshHours for ${sitemap.name}.`);
+    names.add(sitemap.name);
   }
-
-  throw new Error(
-    'No approved pages config found. Create scripts/approved-pages.json or set APPROVED_PAGES_JSON in the environment.'
-  );
+  for (const policy of parsed.urlPolicies ?? []) new RegExp(policy.pattern, 'i');
+  for (const pattern of parsed.excludePatterns ?? []) new RegExp(pattern, 'i');
+  return parsed;
 }
 
-function normalizeUrl(url: string): string {
-  if (/^https?:\/\//i.test(url)) return url;
-  return `${BASE_SITE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/[\s\u00A0]+/g, ' ').trim();
-}
-
-function decodeHtmlEntities(text: string): string {
-  return text.replace(/&(?:quot|amp|apos|lt|gt);/g, (entity) => {
-    switch (entity) {
-      case '&quot;': return '"';
-      case '&amp;': return '&';
-      case '&apos;': return "'";
-      case '&lt;': return '<';
-      case '&gt;': return '>';
-      default: return entity;
-    }
-  }).replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-    .replace(/&#x([\da-fA-F]+);/g, (_, code) => String.fromCharCode(parseInt(code, 16)));
-}
-
-function htmlToText(html: string): string {
-  const normalizePlainText = (text: string): string => {
-    const headingBreakToken = '___HEADING_BREAK___';
-    return normalizeWhitespace(text.replace(/\n+(?=\s*# )/g, ` ${headingBreakToken} `))
-      .replaceAll(headingBreakToken, '\n');
-  };
-  const lowerHtml = html.toLowerCase();
-  const mainStart = lowerHtml.indexOf('<main');
-  const mainOpenEnd = mainStart >= 0 ? html.indexOf('>', mainStart) : -1;
-  const mainEnd = lowerHtml.lastIndexOf('</main>');
-  const contentHtml = mainStart >= 0 && mainOpenEnd >= 0 && mainEnd > mainOpenEnd
-    ? html.slice(mainOpenEnd + 1, mainEnd)
-    : html
-      .replace(/<nav[\s\S]*<\/nav>/gi, ' ')
-      .replace(/<header[\s\S]*<\/header>/gi, ' ')
-      .replace(/<footer[\s\S]*<\/footer>/gi, ' ');
-  const withoutScripts = contentHtml.replace(/<script[\s\S]*?<\/script>/gi, ' ');
-  const withoutStyles = withoutScripts.replace(/<style[\s\S]*?<\/style>/gi, ' ');
-  const withHeadingMarkers = withoutStyles.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, content) => {
-    const heading = normalizeWhitespace(decodeHtmlEntities(content));
-    return `\n\n# ${heading}\n\n`;
-  });
-  const textOnly = withHeadingMarkers.replace(/<[^>]+>/g, ' ');
-  const plainText = normalizePlainText(decodeHtmlEntities(textOnly));
-  const skipToContentIndex = plainText.slice(0, 3000).toLowerCase().indexOf('skip to content');
-  const contentWithoutSkipLink = skipToContentIndex >= 0
-    ? plainText.slice(skipToContentIndex + 'skip to content'.length).trim()
-    : plainText;
-  const cleanedText = contentWithoutSkipLink
-    .replaceAll('Watch Video', ' ')
-    .replaceAll('Learn More', ' ')
-    .replaceAll('Register', ' ')
-    .replaceAll('Copy to clipboard', ' ')
-    .replaceAll('" />', ' ')
-    .replaceAll('→', ' ')
-    .replace(/\s\+\s/g, ' ');
-  return normalizePlainText(cleanedText).replaceAll(' # ', '\n# ');
-}
-
-function extractTitle(html: string): string {
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (titleMatch?.[1]) return normalizeWhitespace(decodeHtmlEntities(titleMatch[1]));
-
-  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  if (h1Match?.[1]) return normalizeWhitespace(decodeHtmlEntities(h1Match[1]));
-
-  return 'Untitled Page';
-}
-
-function splitByHeadings(text: string): Array<{ section: string; content: string }> {
-  const parts = text.split(/\n(?=# )/g).map((part) => part.trim()).filter(Boolean);
-  if (parts.length <= 1) {
-    return [{ section: 'page', content: text }];
-  }
-
-  return parts.map((part) => {
-    const firstLineEnd = part.indexOf('\n');
-    const firstLine = firstLineEnd >= 0 ? part.slice(0, firstLineEnd) : part;
-    const section = firstLine.replace(/^#\s*/, '').trim() || 'page';
-    let content = firstLineEnd >= 0 ? part.slice(firstLineEnd + 1).trim() : '';
-    if (content.toLowerCase().startsWith(section.toLowerCase())) {
-      content = content.slice(section.length).trim();
-    }
-    return { section, content };
-  });
-}
-
-function mergeShortSections(sections: Array<{ section: string; content: string }>): Array<{ section: string; content: string }> {
-  const merged: Array<{ section: string; content: string }> = [];
-
-  for (let index = 0; index < sections.length; index += 1) {
-    const current = { ...sections[index] };
-
-    while (current.content.length < 300 && index + 1 < sections.length) {
-      index += 1;
-      const next = sections[index];
-      current.content = `${current.content}\n\n${next.section}\n\n${next.content}`.trim();
-    }
-
-    merged.push(current);
-  }
-
-  return merged;
-}
-
-function chunkLongText(section: { section: string; content: string }, maxLength = 1800): Array<{ section: string; content: string }> {
-  if (section.content.length <= maxLength) return [section];
-
-  const words = section.content.split(/\s+/);
-  const chunks: Array<{ section: string; content: string }> = [];
-  let currentWords: string[] = [];
-
-  for (const word of words) {
-    currentWords.push(word);
-    if (currentWords.join(' ').length >= maxLength) {
-      chunks.push({ section: section.section, content: currentWords.join(' ') });
-      currentWords = [];
-    }
-  }
-
-  if (currentWords.length) {
-    chunks.push({ section: section.section, content: currentWords.join(' ') });
-  }
-
-  return chunks;
-}
-
-function buildChunks(url: string, title: string, depth: Depth, text: string): PageChunk[] {
-  const sectioned = mergeShortSections(splitByHeadings(text));
-  const chunks: PageChunk[] = [];
-
-  for (const section of sectioned) {
-    const boundedSections = chunkLongText(section, 1800);
-    for (const bounded of boundedSections) {
-      chunks.push({
-        url,
-        title,
-        section: bounded.section,
-        content: bounded.content,
-        depth,
-        content_type: 'page',
+async function fetchWithRetry(url: string, init: RequestInit = {}, attempts = FETCH_ATTEMPTS): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        ...init,
+        headers: { 'User-Agent': 'TheWellIngest/2.0', ...init.headers },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
+      if (response.ok) return response;
+      const body = await response.text();
+      const message = `${response.status} ${response.statusText}: ${body.slice(0, 300)}`;
+      if (response.status < 500 && response.status !== 429) throw new NonRetryableFetchError(message);
+      lastError = new Error(message);
+    } catch (error) {
+      if (error instanceof NonRetryableFetchError) throw error;
+      lastError = error;
+      if (attempt === attempts) break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Failed to fetch ${url}`);
+}
+
+function serviceHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY!,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
+    Accept: 'application/json',
+    ...extra,
+  };
+}
+
+async function discoverSources(config: IngestionConfig): Promise<DiscoveryResult> {
+  const indexUrl = canonicalizeUrl(config.sitemapIndex, BASE_SITE_URL!);
+  const indexEntries = parseSitemapEntries(await (await fetchWithRetry(indexUrl)).text());
+  if (!indexEntries.length) throw new Error(`Sitemap index contained no entries: ${indexUrl}`);
+
+  const sources = new Map<string, DiscoveredSource>();
+  const successfulSitemaps = new Set<string>();
+  const failedSitemaps: string[] = [];
+  const ignoredSitemaps: string[] = [];
+  for (const entry of indexEntries) {
+    const sitemapUrl = canonicalizeUrl(entry.url, BASE_SITE_URL!);
+    const policy = resolveSitemapPolicy(sitemapUrl, config);
+    if (!policy) {
+      ignoredSitemaps.push(sitemapUrl);
+      continue;
+    }
+    try {
+      const pageEntries = parseSitemapEntries(await (await fetchWithRetry(sitemapUrl)).text());
+      if (!pageEntries.length) throw new Error('Sitemap contained no URLs.');
+      successfulSitemaps.add(sitemapUrl);
+      for (const pageEntry of pageEntries) {
+        const url = canonicalizeUrl(pageEntry.url, BASE_SITE_URL!);
+        if (new URL(url).origin !== new URL(BASE_SITE_URL!).origin) continue;
+        const candidate = applyUrlPolicy({
+          url,
+          lastModified: pageEntry.lastModified,
+          sitemapUrl,
+          sitemapName: policy.name,
+          contentType: policy.contentType,
+          refreshHours: policy.refreshHours,
+          depth: policy.depth,
+        }, config);
+        if (!candidate) continue;
+        const existing = sources.get(url);
+        if (!existing || candidate.refreshHours < existing.refreshHours) sources.set(url, candidate);
+      }
+    } catch (error) {
+      failedSitemaps.push(sitemapUrl);
+      console.error(`Failed to discover ${sitemapUrl}:`, error instanceof Error ? error.message : error);
     }
   }
 
-  const filteredChunks = chunks.filter((chunk) => chunk.content.trim().length >= 20);
-  return filteredChunks.length ? filteredChunks : [{ url, title, section: 'page', content: text, depth, content_type: 'page' }];
+  const missing = config.sitemaps.filter((policy) =>
+    !indexEntries.some((entry) => new URL(entry.url).pathname.endsWith(`/${policy.name}`))
+  );
+  if (missing.length) throw new Error(`Configured sitemaps missing from index: ${missing.map((item) => item.name).join(', ')}`);
+  return { sources, successfulSitemaps, failedSitemaps, ignoredSitemaps };
 }
 
-function summaryForUrl(url: string): string | undefined {
-  if (url.includes('/sundays')) return 'Sunday gathering times, service times, worship service schedule, what time does church start, weekly meeting times, location, address, where is The Well located at The Well Austin: 9am and 11am at Eastside Early College High School, 903 Neal Street, Austin TX.';
-  if (url.includes('/giving')) return 'This page contains information about how to give and donate to The Well Austin.';
-  if (url.includes('/serve')) return 'This page contains information about volunteer teams and how to sign up to serve and volunteer at The Well Austin.';
-  if (url.includes('/community')) return 'This page contains information about community groups across Austin at The Well Austin.';
-  if (url.includes('/ministries')) return 'This page contains information about ministries including kids ministry at The Well Austin.';
-  if (url.includes('/beliefs')) return 'This page contains information about what The Well Austin believes doctrinally.';
-  if (url.includes('/events')) return 'This page contains information about upcoming events at The Well Austin.';
-  if (url.includes('/team')) return 'This page contains information about The Well Austin staff and team members.';
-  if (url.includes('/mission')) return 'This page describes the mission, vision, and values of The Well Austin Community Church.';
-  if (url.includes('/stories')) return 'This page contains stories and testimonies from members of The Well Austin Community Church.';
-  if (url.includes('/podcast')) return 'This page contains information about the Well Said podcast by The Well Austin Community Church.';
-  if (url.includes('/planting')) return 'This page contains information about the National Church Planting Residency at The Well Austin.';
-  if (url.includes('/missions')) return 'This page contains information about international missions and mission trips at The Well Austin.';
-  if (url.includes('/residency')) return 'This page contains information about the Ministry Residency Program at The Well Austin.';
-  if (url.includes('/impact')) return 'This page contains impact reports and updates about The Well Austin Community Church.';
-  return undefined;
-}
-
-function formatEventListings(text: string): string {
-  const monthPattern = 'Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec';
-  const cleanedText = text.replace(new RegExp(`\\b(${monthPattern})\\s+\\.\\s+(\\d{1,2})\\b`, 'g'), '$1 $2');
-  const datePattern = new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:\\s+[—-]\\s+(${monthPattern})\\s+(\\d{1,2}))?\\b`, 'g');
-  const matches = Array.from(cleanedText.matchAll(datePattern));
-
-  if (!matches.length) return cleanedText;
-
-  const eventLines = matches.map((match, index) => {
-    const nextMatch = matches[index + 1];
-    const eventName = cleanedText.slice(match.index! + match[0].length, nextMatch?.index ?? cleanedText.length).trim();
-    const startDate = `${match[1]} ${Number(match[2])}`;
-    const endDate = match[3] && match[4] ? ` - ${match[3]} ${Number(match[4])}` : '';
-    return eventName ? `- ${eventName}: ${startDate}${endDate}` : '';
-  }).filter(Boolean);
-
-  return eventLines.length ? eventLines.join('\n') : cleanedText;
-}
-
-async function fetchPage(url: string): Promise<string> {
-  const response = await fetch(url, { headers: { 'User-Agent': 'TheWellIngest/1.0' } });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+async function loadStoredDocuments(): Promise<Map<string, StoredDocument[]>> {
+  const grouped = new Map<string, StoredDocument[]>();
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const endpoint = `${SUPABASE_URL}/rest/v1/documents?select=id,url,title,section,content,depth,content_type,last_indexed_at&order=url.asc&limit=${pageSize}&offset=${offset}`;
+    const rows = await (await fetchWithRetry(endpoint, { headers: serviceHeaders() })).json() as StoredDocument[];
+    for (const row of rows) {
+      const url = canonicalizeUrl(row.url, BASE_SITE_URL!);
+      grouped.set(url, [...(grouped.get(url) ?? []), row]);
+    }
+    if (rows.length < pageSize) break;
   }
-  return response.text();
+  return grouped;
+}
+
+function storedFingerprint(documents: StoredDocument[]): string | null {
+  if (!documents.length) return null;
+  const first = documents[0];
+  return contentHash(first.title ?? 'Untitled Page', documents.map((document) => ({
+    url: document.url,
+    title: document.title ?? 'Untitled Page',
+    section: document.section ?? 'page',
+    content: document.content,
+    depth: document.depth === 'shallow' ? 'shallow' : 'deep',
+    content_type: document.content_type ?? 'page',
+  })));
+}
+
+async function touchDocuments(url: string, checkedAt: string): Promise<void> {
+  const response = await fetchWithRetry(`${SUPABASE_URL}/rest/v1/documents?url=eq.${encodeURIComponent(url)}`, {
+    method: 'PATCH',
+    headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
+    body: JSON.stringify({ last_indexed_at: checkedAt }),
+  });
+  await response.body?.cancel();
 }
 
 async function embedTexts(texts: string[]): Promise<number[][]> {
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
+  const response = await fetchWithRetry(OPENAI_EMBEDDINGS_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
     body: JSON.stringify({ model: 'text-embedding-3-small', input: texts }),
   });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`OpenAI embedding request failed: ${response.status} ${response.statusText} - ${body}`);
+  const payload = await response.json() as { data?: Array<{ index: number; embedding: number[] }> };
+  const embeddings = (payload.data ?? []).sort((left, right) => left.index - right.index).map((item) => item.embedding);
+  if (embeddings.length !== texts.length || embeddings.some((embedding) => embedding.length !== 1536)) {
+    throw new Error(`Embedding response mismatch: expected ${texts.length} 1536-dimensional vectors, received ${embeddings.length}.`);
   }
-
-  const payload = await response.json();
-  return payload.data.map((item: { embedding: number[] }) => item.embedding);
+  return embeddings;
 }
 
-async function deleteExistingRows(url: string): Promise<void> {
-  const encodedUrl = encodeURIComponent(url);
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/documents?url=eq.${encodedUrl}`, {
-    method: 'DELETE',
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY!,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
-      Accept: 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Supabase delete failed for ${url}: ${response.status} ${response.statusText} - ${body}`);
-  }
-}
-
-async function insertChunks(chunks: PageChunk[], indexedAt: string): Promise<void> {
-  const rows = chunks.map((chunk) => ({
-    url: chunk.url,
-    title: chunk.title,
-    section: chunk.section,
-    content: chunk.content,
-    embedding: chunk.embedding,
-    depth: chunk.depth,
-    content_type: chunk.content_type,
-    last_indexed_at: indexedAt,
-  }));
-
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/documents`, {
+async function insertChunks(chunks: PageChunk[], indexedAt: string): Promise<string[]> {
+  const response = await fetchWithRetry(`${SUPABASE_URL}/rest/v1/documents`, {
     method: 'POST',
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY!,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(rows),
+    headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'return=representation' }),
+    body: JSON.stringify(chunks.map((chunk) => ({
+      url: chunk.url,
+      title: chunk.title,
+      section: chunk.section,
+      content: chunk.content,
+      embedding: chunk.embedding,
+      depth: chunk.depth,
+      content_type: chunk.content_type,
+      last_indexed_at: indexedAt,
+    }))),
   });
+  const inserted = await response.json() as Array<{ id: string }>;
+  if (inserted.length !== chunks.length || inserted.some((row) => !row.id)) {
+    throw new Error(`Insert response mismatch: expected ${chunks.length} rows, received ${inserted.length}.`);
+  }
+  return inserted.map((row) => row.id);
+}
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Supabase insert failed: ${response.status} ${response.statusText} - ${body}`);
+async function deleteDocuments(ids: string[]): Promise<void> {
+  for (let start = 0; start < ids.length; start += 100) {
+    const batch = ids.slice(start, start + 100);
+    const response = await fetchWithRetry(`${SUPABASE_URL}/rest/v1/documents?id=in.(${batch.join(',')})`, {
+      method: 'DELETE',
+      headers: serviceHeaders({ Prefer: 'return=minimal' }),
+    });
+    await response.body?.cancel();
   }
 }
 
-async function ingestPage(page: ApprovedPageConfig): Promise<void> {
-  const resolvedUrl = normalizeUrl(page.url);
-  console.log(`Ingesting ${resolvedUrl} (${page.depth})...`);
+async function replacePageSafely(existing: StoredDocument[], chunks: PageChunk[], indexedAt: string): Promise<boolean> {
+  await insertChunks(chunks, indexedAt);
+  try {
+    await deleteDocuments(existing.map((document) => document.id));
+    return false;
+  } catch (error) {
+    console.warn(
+      `New chunks were stored, but ${existing.length} old chunks could not be fully removed. `
+      + `The new data is being preserved to prevent an availability regression; a later ingestion run will retry cleanup. `
+      + `Cause: ${error instanceof Error ? error.message : error}`
+    );
+    return true;
+  }
+}
 
-  const html = await fetchPage(resolvedUrl);
-  const title = extractTitle(html);
-  const plainText = resolvedUrl.includes('/events') ? formatEventListings(htmlToText(html)) : htmlToText(html);
-  const summary = summaryForUrl(resolvedUrl);
-  const rawChunks = buildChunks(resolvedUrl, title, page.depth, plainText).map((chunk) => ({
-    ...chunk,
-    content: summary ? `${summary}\n\n${chunk.content}` : chunk.content,
-  }));
+async function activateNewCorpusVersion(): Promise<void> {
+  const version = crypto.randomUUID();
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rag_corpus_state?on_conflict=singleton`, {
+    method: 'POST',
+    headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
+    body: JSON.stringify({ singleton: true, active_version: version, updated_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+  const cleanup = await fetch(`${SUPABASE_URL}/rest/v1/semantic_answer_cache?corpus_version=neq.${version}`, {
+    method: 'DELETE',
+    headers: serviceHeaders(),
+  });
+  if (!cleanup.ok) console.warn(`Stale semantic-cache cleanup failed: ${cleanup.status} ${await cleanup.text()}`);
+}
 
-  const texts = rawChunks.map((chunk) => `${chunk.section}\n\n${chunk.content}`);
-  const embeddings = await embedTexts(texts);
+function approximateTokens(chunks: PageChunk[]): number {
+  return Math.ceil(chunks.reduce((total, chunk) => total + chunk.section.length + chunk.content.length, 0) / 4);
+}
 
-  const indexedAt = new Date().toISOString();
-  const chunksWithEmbedding = rawChunks.map((chunk, index) => ({
-    ...chunk,
-    embedding: embeddings[index],
-  }));
+async function processSource(
+  source: DiscoveredSource,
+  existing: StoredDocument[],
+  options: RunOptions,
+  stats: RunStats
+): Promise<boolean> {
+  try {
+    const html = await (await fetchWithRetry(source.url)).text();
+    const checkedAt = new Date().toISOString();
+    stats.checked += 1;
+    if (isNoIndexPage(html)) {
+      if (!options.dryRun) await deleteDocuments(existing.map((document) => document.id));
+      stats.excluded += 1;
+      console.log(`[excluded:noindex] ${source.url}`);
+      return existing.length > 0;
+    }
 
-  await deleteExistingRows(resolvedUrl);
-  await insertChunks(chunksWithEmbedding, indexedAt);
-  console.log(`Stored ${chunksWithEmbedding.length} chunks for ${resolvedUrl}`);
+    const title = extractTitle(html);
+    const text = htmlToText(html);
+    if (text.length < 20) throw new Error(`Extracted content is unexpectedly short (${text.length} characters).`);
+    if ((source.contentType === 'event' || source.contentType === 'retreat')
+      && isEventExpired(extractEventEndDate(html, text, source.url), new Date())) {
+      if (!options.dryRun) await deleteDocuments(existing.map((document) => document.id));
+      stats.expired += 1;
+      console.log(`[expired] ${source.url}`);
+      return existing.length > 0;
+    }
+
+    const chunks = addRetrievalSummary(
+      buildChunks(source.url, title, source.depth, source.contentType, text),
+      summaryForSource(source.url, source.contentType)
+    );
+    const hash = contentHash(title, chunks);
+    if (!shouldEmbedPage(hash, storedFingerprint(existing), options.forceEmbed)) {
+      if (!options.dryRun) await touchDocuments(source.url, checkedAt);
+      stats.unchanged += 1;
+      console.log(`[unchanged] ${source.url}`);
+      return false;
+    }
+
+    stats.embeddedTokensApproximation += approximateTokens(chunks);
+    if (options.dryRun) {
+      console.log(`[would-index] ${source.url} (${chunks.length} chunks)`);
+      return false;
+    }
+    const embeddings = await embedTexts(chunks.map((chunk) => `${chunk.section}\n\n${chunk.content}`));
+    const retainedOldChunks = await replacePageSafely(
+      existing,
+      chunks.map((chunk, index) => ({ ...chunk, embedding: embeddings[index] })),
+      checkedAt
+    );
+    stats.indexed += 1;
+    console.log(`[indexed] ${source.url} (${chunks.length} chunks${retainedOldChunks ? '; old-chunk cleanup pending' : ''})`);
+    return true;
+  } catch (error) {
+    stats.failed += 1;
+    console.error(`[failed] ${source.url}:`, error instanceof Error ? error.message : error);
+    return false;
+  }
 }
 
 async function main(): Promise<void> {
-  assertEnv();
-  const approvedPages = loadApprovedPages();
-
-  if (!approvedPages.length) {
-    console.log('No approved pages configured. Nothing to ingest.');
+  const options = parseOptions(process.argv.slice(2));
+  assertEnvironment(options);
+  const config = loadConfig();
+  const discovery = await discoverSources(config);
+  if (options.discoveryOnly) {
+    const contentTypes = [...discovery.sources.values()].reduce<Record<string, number>>((result, source) => {
+      result[source.contentType] = (result[source.contentType] ?? 0) + 1;
+      return result;
+    }, {});
+    console.log(JSON.stringify({
+      eligibleUrls: discovery.sources.size,
+      successfulSitemaps: discovery.successfulSitemaps.size,
+      failedSitemaps: discovery.failedSitemaps,
+      ignoredSitemaps: discovery.ignoredSitemaps,
+      contentTypes,
+    }, null, 2));
+    if (discovery.failedSitemaps.length) process.exitCode = 1;
     return;
   }
 
-  for (const page of approvedPages) {
-    try {
-      await ingestPage(page);
-    } catch (error) {
-      console.error(`Failed to ingest ${page.url}:`, error instanceof Error ? error.message : error);
-    }
-  }
+  const stored = await loadStoredDocuments();
+  const now = new Date();
+  const sources = [...discovery.sources.values()].sort((left, right) => left.url.localeCompare(right.url));
+  const due = sources.filter((source) => isPageDue(source, stored.get(source.url) ?? [], now, options.forceCheck));
+  const selected = options.limit ? due.slice(0, options.limit) : due;
+  const stats: RunStats = {
+    discovered: sources.length,
+    due: due.length,
+    checked: 0,
+    unchanged: 0,
+    indexed: 0,
+    excluded: 0,
+    expired: 0,
+    failed: 0,
+    embeddedTokensApproximation: 0,
+  };
+  console.log(`Discovered ${sources.length} eligible URLs across ${discovery.successfulSitemaps.size} sitemaps; ${due.length} due.`);
+  if (options.dryRun) console.log('Dry run: no database writes or OpenAI requests will be made.');
 
-  console.log('Ingestion complete.');
+  let corpusChanged = false;
+  for (const source of selected) {
+    if (await processSource(source, stored.get(source.url) ?? [], options, stats)) corpusChanged = true;
+  }
+  if (corpusChanged && !options.dryRun) {
+    try {
+      await activateNewCorpusVersion();
+      console.log('Corpus version advanced because stored content changed.');
+    } catch (error) {
+      console.warn('Content changed, but semantic-cache versioning was unavailable:', error instanceof Error ? error.message : error);
+    }
+  } else {
+    console.log('Corpus version unchanged.');
+  }
+  console.log(JSON.stringify({ ...stats, failedSitemaps: discovery.failedSitemaps.length }, null, 2));
+  if (discovery.failedSitemaps.length || stats.failed) process.exitCode = 1;
 }
 
-if (process.argv[1].endsWith('ingest.ts') || process.argv[1].endsWith('ingest.js')) {
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+if (invokedPath === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

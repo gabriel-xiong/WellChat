@@ -13,6 +13,11 @@ const MAX_QUESTION_LENGTH = 1000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
 const SUGGESTED_ANSWER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const SEMANTIC_CACHE_TTL_SECONDS = Number(process.env.SEMANTIC_CACHE_TTL_SECONDS ?? 7 * 24 * 60 * 60);
+const SEMANTIC_CACHE_THRESHOLD = Number(process.env.SEMANTIC_CACHE_THRESHOLD ?? '0.94');
+const DEDUPLICATION_LOCK_SECONDS = 45;
+const DEDUPLICATION_RESULT_SECONDS = 30;
+const DEDUPLICATION_WAIT_MS = 12_000;
 const RATE_LIMIT_REDIS_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)?.replace(/\/+$/, '');
 const RATE_LIMIT_REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const RATE_LIMIT_SCRIPT = `
@@ -22,6 +27,12 @@ if count == 1 then
 end
 local ttl = redis.call('TTL', KEYS[1])
 return {count, ttl}
+`;
+const RELEASE_LOCK_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
 `;
 
 function createSupabaseClient() {
@@ -97,6 +108,34 @@ const PASTORAL_KEYWORDS = [
   'personal',
   'going through something',
 ];
+const TIME_SENSITIVE_KEYWORDS = [
+  'today',
+  'tomorrow',
+  'tonight',
+  'this week',
+  'next week',
+  'current',
+  'latest',
+  'upcoming',
+  'event',
+  'events',
+  'calendar',
+];
+
+const APPROVED_RESOURCE_LINKS = [
+  { title: 'Sundays With Us', url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'worship', 'visit', 'location', 'parking'] },
+  { title: 'Community Groups', url: 'https://thewellaustin.com/community', keywords: ['community', 'group', 'connect'] },
+  { title: 'Serve', url: 'https://thewellaustin.com/serve', keywords: ['serve', 'volunteer', 'team'] },
+  { title: 'Giving', url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate', 'stock', 'crypto'] },
+  { title: 'Ministries', url: 'https://thewellaustin.com/ministries', keywords: ['ministry', 'kids', 'children', 'youth'] },
+  { title: 'What We Believe', url: 'https://thewellaustin.com/beliefs', keywords: ['believe', 'belief', 'scripture', 'doctrine', 'faith'] },
+  { title: 'Our Team', url: 'https://thewellaustin.com/team', keywords: ['team', 'staff', 'pastor', 'contact'] },
+  { title: 'Events', url: 'https://thewellaustin.com/events', keywords: ['event', 'calendar', 'upcoming'] },
+  { title: 'Sermons', url: 'https://thewellaustin.com/sermons', keywords: ['sermon', 'message', 'teaching'] },
+  { title: 'Podcast', url: 'https://thewellaustin.com/podcast', keywords: ['podcast'] },
+  { title: 'Mission and Vision', url: 'https://thewellaustin.com/mission', keywords: ['mission', 'vision', 'values'] },
+  { title: 'International Missions', url: 'https://thewellaustin.com/missions', keywords: ['international', 'missions', 'trip'] },
+] as const;
 
 interface ChatRequestBody {
   question?: unknown;
@@ -117,12 +156,40 @@ interface RateLimitResult {
   resetAt: number;
 }
 
+interface DeduplicationLease {
+  lockKey: string;
+  resultKey: string;
+  token: string;
+}
+
+interface SemanticCacheMatch {
+  id: string;
+  question: string;
+  answer: string;
+  retrieved_chunk_ids: string[] | null;
+  retrieved_urls: string[] | null;
+  retrieved_titles: string[] | null;
+  similarity: number;
+}
+
+interface RetrievedTrace {
+  chunkIds: string[];
+  urls: string[];
+  titles: string[];
+  similarities: number[];
+}
+
+interface LocalRateBucket {
+  count: number;
+  resetAt: number;
+}
+
+const localRateBuckets = new Map<string, LocalRateBucket>();
+
 function assertEnv(): void {
   if (!SUPABASE_URL) throw new Error('NEXT_PUBLIC_SUPABASE_URL is required.');
   if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required.');
   if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required.');
-  if (!RATE_LIMIT_REDIS_URL) throw new Error('KV_REST_API_URL or UPSTASH_REDIS_REST_URL is required.');
-  if (!RATE_LIMIT_REDIS_TOKEN) throw new Error('KV_REST_API_TOKEN or UPSTASH_REDIS_REST_TOKEN is required.');
 }
 
 function includesKeyword(question: string, keywords: string[]): boolean {
@@ -133,6 +200,27 @@ function includesKeyword(question: string, keywords: string[]): boolean {
 function getClientIp(request: Request): string {
   const forwardedFor = request.headers.get('x-forwarded-for');
   return forwardedFor?.split(',')[0]?.trim() || 'unknown';
+}
+
+function checkLocalRateLimit(ip: string): RateLimitResult {
+  const now = Date.now();
+  const current = localRateBuckets.get(ip);
+  const bucket = !current || current.resetAt <= now
+    ? { count: 1, resetAt: now + RATE_LIMIT_WINDOW_SECONDS * 1000 }
+    : { count: current.count + 1, resetAt: current.resetAt };
+  localRateBuckets.set(ip, bucket);
+
+  if (localRateBuckets.size > 1000) {
+    for (const [key, value] of localRateBuckets) {
+      if (value.resetAt <= now) localRateBuckets.delete(key);
+    }
+  }
+
+  return {
+    allowed: bucket.count <= RATE_LIMIT_MAX_REQUESTS,
+    remaining: Math.max(RATE_LIMIT_MAX_REQUESTS - bucket.count, 0),
+    resetAt: bucket.resetAt,
+  };
 }
 
 async function redisCommand<T>(command: Array<string | number>): Promise<T> {
@@ -147,6 +235,7 @@ async function redisCommand<T>(command: Array<string | number>): Promise<T> {
     },
     body: JSON.stringify(command),
     cache: 'no-store',
+    signal: AbortSignal.timeout(3_000),
   });
 
   if (!response.ok) {
@@ -177,6 +266,17 @@ async function checkRateLimit(ip: string): Promise<RateLimitResult> {
   };
 }
 
+async function checkRateLimitResilient(ip: string): Promise<RateLimitResult> {
+  if (!RATE_LIMIT_REDIS_URL || !RATE_LIMIT_REDIS_TOKEN) return checkLocalRateLimit(ip);
+
+  try {
+    return await checkRateLimit(ip);
+  } catch (error) {
+    console.error('Distributed rate limiter unavailable; using local fallback:', error);
+    return checkLocalRateLimit(ip);
+  }
+}
+
 async function getCachedAnswer(cacheKey: string): Promise<string | null> {
   return redisCommand<string | null>(['GET', `chat-answer:${cacheKey}`]);
 }
@@ -191,12 +291,218 @@ async function setCachedAnswer(cacheKey: string, answer: string): Promise<void> 
   ]);
 }
 
+async function hashQuestion(question: string): Promise<string> {
+  const normalized = question.toLowerCase().replace(/\s+/g, ' ').trim();
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function acquireDeduplicationLease(question: string): Promise<DeduplicationLease | null> {
+  if (!RATE_LIMIT_REDIS_URL || !RATE_LIMIT_REDIS_TOKEN) return null;
+  const hash = await hashQuestion(question);
+  const lease: DeduplicationLease = {
+    lockKey: `chat-inflight:${hash}`,
+    resultKey: `chat-inflight-result:${hash}`,
+    token: crypto.randomUUID(),
+  };
+  const result = await redisCommand<string | null>([
+    'SET',
+    lease.lockKey,
+    lease.token,
+    'NX',
+    'EX',
+    DEDUPLICATION_LOCK_SECONDS,
+  ]);
+  return result === 'OK' ? lease : null;
+}
+
+async function waitForDeduplicatedAnswer(question: string): Promise<string | null> {
+  if (!RATE_LIMIT_REDIS_URL || !RATE_LIMIT_REDIS_TOKEN) return null;
+  const hash = await hashQuestion(question);
+  const resultKey = `chat-inflight-result:${hash}`;
+  const deadline = Date.now() + DEDUPLICATION_WAIT_MS;
+  let pollDelayMs = 200;
+
+  while (Date.now() < deadline) {
+    const answer = await redisCommand<string | null>(['GET', resultKey]);
+    if (answer) return answer;
+    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    pollDelayMs = Math.min(Math.round(pollDelayMs * 1.5), 1_000);
+  }
+
+  return null;
+}
+
+async function publishDeduplicatedAnswer(lease: DeduplicationLease | null, answer: string): Promise<void> {
+  if (!lease) return;
+  await Promise.allSettled([
+    redisCommand<string>(['SET', lease.resultKey, answer, 'EX', DEDUPLICATION_RESULT_SECONDS]),
+    redisCommand<number>(['EVAL', RELEASE_LOCK_SCRIPT, 1, lease.lockKey, lease.token]),
+  ]);
+}
+
+async function releaseDeduplicationLease(lease: DeduplicationLease | null): Promise<void> {
+  if (!lease) return;
+  try {
+    await redisCommand<number>(['EVAL', RELEASE_LOCK_SCRIPT, 1, lease.lockKey, lease.token]);
+  } catch (error) {
+    console.error('Failed to release request deduplication lock:', error);
+  }
+}
+
 function getSupabaseClient() {
   if (!supabaseClient) {
     supabaseClient = createSupabaseClient();
   }
 
   return supabaseClient;
+}
+
+function isSemanticCacheEligible(question: string): boolean {
+  if (includesKeyword(question, CRISIS_KEYWORDS)) return false;
+  if (includesKeyword(question, PASTORAL_KEYWORDS)) return false;
+  if (includesKeyword(question, TIME_SENSITIVE_KEYWORDS)) return false;
+  if (/\b(i|i'm|i’ve|my|mine|me)\b/i.test(question)) return false;
+  return question.length >= 8;
+}
+
+async function getActiveCorpusVersion(): Promise<string | null> {
+  const { data, error } = await getSupabaseClient()
+    .from('rag_corpus_state')
+    .select('active_version')
+    .eq('singleton', true)
+    .maybeSingle();
+  if (error) {
+    console.warn('Semantic cache disabled because corpus state is unavailable:', error.message);
+    return null;
+  }
+  return typeof data?.active_version === 'string' ? data.active_version : null;
+}
+
+async function findSemanticCachedAnswer(
+  question: string,
+  embedding: number[],
+  corpusVersion: string
+): Promise<SemanticCacheMatch | null> {
+  const { data, error } = await getSupabaseClient().rpc('match_semantic_answer_cache', {
+    query_embedding: embedding,
+    requested_corpus_version: corpusVersion,
+    match_threshold: SEMANTIC_CACHE_THRESHOLD,
+  });
+  if (error) {
+    console.warn('Semantic cache lookup skipped:', error.message);
+    return null;
+  }
+  const match = ((data as SemanticCacheMatch[] | null) ?? [])
+    .find((candidate) => isSemanticMatchSafe(question, candidate.question)) ?? null;
+  if (match) {
+    void getSupabaseClient().rpc('record_semantic_cache_hit', { cache_id: match.id });
+  }
+  return match;
+}
+
+function isSemanticMatchSafe(question: string, cachedQuestion: string): boolean {
+  const numberTokens = (value: string) => [...value.matchAll(/\b\d+(?::\d+)?\b/g)].map((match) => match[0]).sort();
+  const hasNegation = (value: string) => /\b(no|not|never|without|can't|cannot|don't|doesn't|isn't|aren't)\b/i.test(value);
+  const leftNumbers = numberTokens(question);
+  const rightNumbers = numberTokens(cachedQuestion);
+  return hasNegation(question) === hasNegation(cachedQuestion)
+    && JSON.stringify(leftNumbers) === JSON.stringify(rightNumbers)
+    && classifyQuestion(question) === classifyQuestion(cachedQuestion);
+}
+
+async function storeSemanticCachedAnswer(entry: {
+  question: string;
+  embedding: number[];
+  answer: string;
+  corpusVersion: string;
+  chunks: MatchDocument[];
+}): Promise<void> {
+  const sources = extractMarkdownSources(entry.answer);
+  const retrievedUrls = new Set(entry.chunks.map((chunk) => chunk.url.replace(/\/+$/, '')));
+  const citationsAreGrounded = sources.length > 0
+    && sources.every((source) => retrievedUrls.has(source.url.replace(/\/+$/, '')));
+  if (!citationsAreGrounded) return;
+
+  const expiresAt = new Date(Date.now() + SEMANTIC_CACHE_TTL_SECONDS * 1000).toISOString();
+  const { error } = await getSupabaseClient().from('semantic_answer_cache').insert({
+    question: entry.question,
+    question_embedding: entry.embedding,
+    answer: entry.answer,
+    retrieved_chunk_ids: entry.chunks.map((chunk) => chunk.id),
+    retrieved_urls: entry.chunks.map((chunk) => chunk.url),
+    retrieved_titles: entry.chunks.map((chunk) => chunk.title || 'Untitled Page'),
+    corpus_version: entry.corpusVersion,
+    expires_at: expiresAt,
+  });
+  if (error) console.warn('Failed to store semantic cache entry:', error.message);
+}
+
+function traceFromChunks(chunks: MatchDocument[]): RetrievedTrace {
+  return {
+    chunkIds: chunks.map((chunk) => chunk.id),
+    urls: chunks.map((chunk) => chunk.url),
+    titles: chunks.map((chunk) => chunk.title || 'Untitled Page'),
+    similarities: chunks.map((chunk) => chunk.similarity),
+  };
+}
+
+function selectFallbackSources(question: string, chunks: MatchDocument[] = []): Source[] {
+  const uniqueSources = new Map<string, Source>();
+  for (const chunk of chunks) {
+    if (!uniqueSources.has(chunk.url)) {
+      uniqueSources.set(chunk.url, { title: chunk.title || 'The Well Austin resource', url: chunk.url });
+    }
+    if (uniqueSources.size >= 3) return Array.from(uniqueSources.values());
+  }
+
+  const normalized = question.toLowerCase();
+  for (const resource of APPROVED_RESOURCE_LINKS) {
+    if (resource.keywords.some((keyword) => normalized.includes(keyword))) {
+      uniqueSources.set(resource.url, { title: resource.title, url: resource.url });
+    }
+    if (uniqueSources.size >= 3) break;
+  }
+
+  if (!uniqueSources.size) {
+    for (const resource of [APPROVED_RESOURCE_LINKS[0], APPROVED_RESOURCE_LINKS[1], APPROVED_RESOURCE_LINKS[6]]) {
+      uniqueSources.set(resource.url, { title: resource.title, url: resource.url });
+    }
+  }
+  return Array.from(uniqueSources.values());
+}
+
+function buildDegradedAnswer(question: string, chunks: MatchDocument[] = []): { answer: string; sources: Source[] } {
+  const sources = selectFallbackSources(question, chunks);
+  const links = sources.map((source) => `- [${source.title}](${source.url})`).join('\n');
+  return {
+    answer: `I'm having trouble generating a full answer right now, but these approved pages may help:\n\n${links}\n\nFor direct help, please contact us at ${ESCALATION_CONTACT}.`,
+    sources,
+  };
+}
+
+function degradedResponse(
+  question: string,
+  queryId: string,
+  reason: string,
+  chunks: MatchDocument[] = []
+): Response {
+  const fallback = buildDegradedAnswer(question, chunks);
+  return Response.json(
+    {
+      answer: fallback.answer,
+      sources: fallback.sources,
+      fallback_triggered: true,
+      query_id: queryId,
+    },
+    {
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-Chat-Degraded': reason,
+        'X-Query-Id': queryId,
+      },
+    }
+  );
 }
 
 async function embedQuestion(question: string): Promise<number[]> {
@@ -207,6 +513,7 @@ async function embedQuestion(question: string): Promise<number[]> {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
     },
     body: JSON.stringify({ model: 'text-embedding-3-small', input: question }),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {
@@ -272,15 +579,7 @@ function cachedAnswerResponse(answer: string, queryId: string, logQuery: (answer
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const words = answer.match(/\S+\s*/g) ?? [answer];
-      const wordsPerChunk = 1;
-
-      for (let index = 0; index < words.length; index += wordsPerChunk) {
-        controller.enqueue(encoder.encode(words.slice(index, index + wordsPerChunk).join('')));
-        if (index + wordsPerChunk < words.length) {
-          await new Promise((resolve) => setTimeout(resolve, 45));
-        }
-      }
+      controller.enqueue(encoder.encode(answer));
       controller.close();
 
       try {
@@ -305,7 +604,7 @@ async function streamAnswer(
   question: string,
   chunks: MatchDocument[],
   queryId: string,
-  completeAnswer: (answer: string) => Promise<void>
+  completeAnswer: (answer: string, degraded?: boolean) => Promise<void>
 ): Promise<Response> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -322,6 +621,7 @@ async function streamAnswer(
       temperature: 0.2,
       stream: true,
     }),
+    signal: AbortSignal.timeout(20_000),
   });
 
   if (!response.ok) {
@@ -368,12 +668,23 @@ async function streamAnswer(
         controller.close();
 
         try {
-          await completeAnswer(answer.trim() || FALLBACK_ANSWER);
+          await completeAnswer(answer.trim() || FALLBACK_ANSWER, false);
         } catch (error) {
           console.error('Failed to finalize streamed chat query:', error);
         }
       } catch (error) {
-        controller.error(error);
+        console.error('Generation stream failed; returning approved resources:', error);
+        const degraded = buildDegradedAnswer(question, chunks).answer;
+        const suffix = answer.trim()
+          ? `\n\nThe generated response was interrupted. You can still use these approved resources:\n\n${selectFallbackSources(question, chunks).map((source) => `- [${source.title}](${source.url})`).join('\n')}`
+          : degraded;
+        controller.enqueue(encoder.encode(suffix));
+        controller.close();
+        try {
+          await completeAnswer(`${answer}${suffix}`.trim(), true);
+        } catch (completionError) {
+          console.error('Failed to finalize degraded chat query:', completionError);
+        }
       }
     },
   });
@@ -389,9 +700,14 @@ async function streamAnswer(
 }
 
 export async function POST(request: Request) {
+  let deduplicationLease: DeduplicationLease | null = null;
+  let question = '';
+  let queryId = '';
+  let category = 'general';
+
   try {
     const clientIp = getClientIp(request);
-    const rateLimit = await checkRateLimit(clientIp);
+    const rateLimit = await checkRateLimitResilient(clientIp);
     if (!rateLimit.allowed) {
       const retryAfterSeconds = Math.max(Math.ceil((rateLimit.resetAt - Date.now()) / 1000), 1);
 
@@ -412,7 +728,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json() as ChatRequestBody;
-    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    question = typeof body.question === 'string' ? body.question.trim() : '';
     if (!question) {
       return Response.json({ error: 'question is required' }, { status: 400 });
     }
@@ -424,8 +740,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const queryId = crypto.randomUUID();
-    const category = classifyQuestion(question);
+    queryId = crypto.randomUUID();
+    category = classifyQuestion(question);
 
     if (includesKeyword(question, CRISIS_KEYWORDS)) {
       after(() => logStandaloneQuery({
@@ -440,10 +756,22 @@ export async function POST(request: Request) {
     assertEnv();
 
     const supabase = getSupabaseClient();
-    const suggestedAnswerCacheKey = getSuggestedAnswerCacheKey(question);
-    const cachedAnswer = suggestedAnswerCacheKey
-      ? await getCachedAnswer(suggestedAnswerCacheKey)
+    const baseSuggestedAnswerCacheKey = getSuggestedAnswerCacheKey(question);
+    const semanticCacheEligible = isSemanticCacheEligible(question);
+    let corpusVersion = baseSuggestedAnswerCacheKey && semanticCacheEligible
+      ? await getActiveCorpusVersion()
       : null;
+    const suggestedAnswerCacheKey = baseSuggestedAnswerCacheKey
+      ? `${baseSuggestedAnswerCacheKey}:${corpusVersion ?? 'legacy'}`
+      : null;
+    let cachedAnswer: string | null = null;
+    if (suggestedAnswerCacheKey) {
+      try {
+        cachedAnswer = await getCachedAnswer(suggestedAnswerCacheKey);
+      } catch (error) {
+        console.error('Exact answer cache unavailable; continuing without it:', error);
+      }
+    }
 
     if (cachedAnswer) {
       const logCachedQuery = async (answer: string) => {
@@ -468,29 +796,110 @@ export async function POST(request: Request) {
       return cachedAnswerResponse(cachedAnswer, queryId, logCachedQuery);
     }
 
-    const questionEmbedding = await embedQuestion(question);
-    const { data, error } = await supabase.rpc('match_documents', {
-      query_embedding: questionEmbedding,
-      similarity_threshold: MIN_SIMILARITY_THRESHOLD,
-      limit_count: 12,
-    });
+    if (RATE_LIMIT_REDIS_URL && RATE_LIMIT_REDIS_TOKEN) {
+      try {
+        deduplicationLease = await acquireDeduplicationLease(question);
+        if (!deduplicationLease) {
+          const sharedAnswer = await waitForDeduplicatedAnswer(question);
+          if (sharedAnswer) {
+            const logDeduplicatedQuery = async (answer: string) => {
+              const { error: logError } = await supabase.from('query_logs').insert({
+                id: queryId,
+                question,
+                retrieved_chunk_ids: [],
+                retrieved_urls: [],
+                retrieved_titles: [],
+                similarity_scores: [],
+                answer,
+                fallback_triggered: false,
+                category,
+                cache_hit: true,
+              });
+              if (logError) console.error('Failed to log deduplicated query:', logError.message);
+            };
+            return cachedAnswerResponse(sharedAnswer, queryId, logDeduplicatedQuery);
+          }
+          deduplicationLease = await acquireDeduplicationLease(question);
+        }
+      } catch (error) {
+        console.error('Request deduplication unavailable; continuing independently:', error);
+        deduplicationLease = null;
+      }
+    }
 
-    if (error) throw new Error(`Supabase match_documents failed: ${error.message}`);
+    let questionEmbedding: number[];
+    try {
+      questionEmbedding = await embedQuestion(question);
+    } catch (error) {
+      console.error('Embedding unavailable; returning approved resources:', error);
+      const fallback = buildDegradedAnswer(question);
+      await Promise.allSettled([
+        logStandaloneQuery({ id: queryId, question, answer: fallback.answer, category }),
+        publishDeduplicatedAnswer(deduplicationLease, fallback.answer),
+      ]);
+      return degradedResponse(question, queryId, 'embedding_unavailable');
+    }
+
+    if (semanticCacheEligible && !corpusVersion) {
+      corpusVersion = await getActiveCorpusVersion();
+    }
+    if (semanticCacheEligible && corpusVersion) {
+      const semanticMatch = await findSemanticCachedAnswer(question, questionEmbedding, corpusVersion);
+      if (semanticMatch) {
+        const logSemanticCachedQuery = async (answer: string) => {
+          const { error: logError } = await supabase.from('query_logs').insert({
+            id: queryId,
+            question,
+            retrieved_chunk_ids: semanticMatch.retrieved_chunk_ids ?? [],
+            retrieved_urls: semanticMatch.retrieved_urls ?? [],
+            retrieved_titles: semanticMatch.retrieved_titles ?? [],
+            similarity_scores: [],
+            answer,
+            fallback_triggered: false,
+            category,
+            cache_hit: true,
+          });
+          if (logError) console.error('Failed to log semantic cache hit:', logError.message);
+        };
+        await publishDeduplicatedAnswer(deduplicationLease, semanticMatch.answer);
+        return cachedAnswerResponse(semanticMatch.answer, queryId, logSemanticCachedQuery);
+      }
+    }
+
+    let data: unknown;
+    try {
+      const retrieval = await supabase.rpc('match_documents', {
+        query_embedding: questionEmbedding,
+        similarity_threshold: MIN_SIMILARITY_THRESHOLD,
+        limit_count: 12,
+      });
+      if (retrieval.error) throw new Error(`Supabase match_documents failed: ${retrieval.error.message}`);
+      data = retrieval.data;
+    } catch (error) {
+      console.error('Retrieval unavailable; returning approved resources:', error);
+      const fallback = buildDegradedAnswer(question);
+      await Promise.allSettled([
+        logStandaloneQuery({ id: queryId, question, answer: fallback.answer, category }),
+        publishDeduplicatedAnswer(deduplicationLease, fallback.answer),
+      ]);
+      return degradedResponse(question, queryId, 'retrieval_unavailable');
+    }
 
     const chunks = rerankChunks(question, (data ?? []) as MatchDocument[]);
 
     const topSimilarity = chunks[0]?.similarity ?? 0;
     const fallbackTriggered = chunks.length === 0 || topSimilarity < MIN_SIMILARITY_THRESHOLD;
-    const logQuery = async (answer: string) => {
+    const trace = traceFromChunks(chunks);
+    const logQuery = async (answer: string, degraded = fallbackTriggered) => {
       const { error: logError } = await supabase.from('query_logs').insert({
         id: queryId,
         question,
-        retrieved_chunk_ids: chunks.map((chunk) => chunk.id),
-        retrieved_urls: chunks.map((chunk) => chunk.url),
-        retrieved_titles: chunks.map((chunk) => chunk.title || 'Untitled Page'),
-        similarity_scores: chunks.map((chunk) => chunk.similarity),
+        retrieved_chunk_ids: trace.chunkIds,
+        retrieved_urls: trace.urls,
+        retrieved_titles: trace.titles,
+        similarity_scores: trace.similarities,
         answer,
-        fallback_triggered: fallbackTriggered,
+        fallback_triggered: degraded,
         category,
         cache_hit: false,
       });
@@ -501,10 +910,22 @@ export async function POST(request: Request) {
     };
 
     if (!fallbackTriggered) {
-      const completeAnswer = async (answer: string) => {
-        const tasks: Promise<unknown>[] = [logQuery(answer)];
-        if (suggestedAnswerCacheKey) {
+      const completeAnswer = async (answer: string, degraded = false) => {
+        const tasks: Promise<unknown>[] = [
+          logQuery(answer, degraded),
+          publishDeduplicatedAnswer(deduplicationLease, answer),
+        ];
+        if (!degraded && suggestedAnswerCacheKey) {
           tasks.push(setCachedAnswer(suggestedAnswerCacheKey, answer));
+        }
+        if (!degraded && semanticCacheEligible && corpusVersion) {
+          tasks.push(storeSemanticCachedAnswer({
+            question,
+            embedding: questionEmbedding,
+            answer,
+            corpusVersion,
+            chunks,
+          }));
         }
 
         const results = await Promise.allSettled(tasks);
@@ -515,18 +936,35 @@ export async function POST(request: Request) {
         }
       };
 
-      return streamAnswer(question, chunks, queryId, completeAnswer);
+      try {
+        return await streamAnswer(question, chunks, queryId, completeAnswer);
+      } catch (error) {
+        console.error('Generation unavailable; returning retrieved resources:', error);
+        const fallback = buildDegradedAnswer(question, chunks);
+        await Promise.allSettled([
+          logQuery(fallback.answer, true),
+          publishDeduplicatedAnswer(deduplicationLease, fallback.answer),
+        ]);
+        return degradedResponse(question, queryId, 'generation_unavailable', chunks);
+      }
     }
 
     const answer = includesKeyword(question, PASTORAL_KEYWORDS) ? PASTORAL_FALLBACK_ANSWER : FALLBACK_ANSWER;
     const sources = extractMarkdownSources(answer);
 
-    await logQuery(answer);
+    await Promise.allSettled([
+      logQuery(answer),
+      publishDeduplicatedAnswer(deduplicationLease, answer),
+    ]);
 
     return Response.json({ answer, sources, fallback_triggered: fallbackTriggered, query_id: queryId });
   } catch (error) {
     console.error(error);
+    await releaseDeduplicationLease(deduplicationLease);
     after(() => logChatEvent('api_error'));
+    if (question && queryId) {
+      return degradedResponse(question, queryId, 'pipeline_unavailable');
+    }
     return Response.json(
       { error: 'Unable to process chat request.' },
       { status: 500 }

@@ -48,8 +48,11 @@ Query logged to Supabase (question, chunks, scores, answer)
 - **Streaming responses** — OpenAI streaming API with real-time token display in the chat UI
 - **Guardrail routing** — crisis/self-harm queries bypass retrieval and immediately return emergency resources (911, 988 Lifeline); pastoral queries route to staff contact
 - **Tunable similarity threshold** — configurable via environment variable, logged per-query for iterative tuning
+- **Semantic answer caching** — conservatively reuses grounded answers for equivalent, non-sensitive questions and invalidates them when the corpus changes
+- **Request deduplication** — a Redis single-flight lock prevents simultaneous identical questions from repeating embedding, retrieval, and generation work
+- **Graceful degradation** — returns approved church resources when Redis, embeddings, retrieval, or generation are temporarily unavailable
 - **Section-aware chunking** — heading-based splitting with short-section merging and URL-specific summary injection to improve embedding quality
-- **Re-indexing pipeline** — delete-then-reinsert ingestion flow prevents stale chunk accumulation; can be run manually or scheduled via GitHub Actions
+- **Incremental indexing pipeline** — sitemap discovery, volatility-aware checks, content hashes, and failure-safe replacement keep coverage current without re-embedding unchanged pages
 
 ## Project Structure
 
@@ -62,7 +65,9 @@ Query logged to Supabase (question, chunks, scores, answer)
 │   └── ChatWidget.tsx         # Chat UI with streaming
 ├── scripts/
 │   ├── ingest.ts              # Ingestion pipeline
-│   └── approved-pages.json    # Approved content sources
+│   ├── ingestion-core.ts      # Pure discovery, scheduling, extraction, hashing, and chunking logic
+│   └── ingestion-core.test.ts # Deterministic ingestion regression tests
+├── ingestion-config.json      # Approved sitemaps, refresh tiers, and exclusions
 ├── db/
 │   └── schema.sql             # Supabase schema + match_documents RPC
 └── .env.example
@@ -109,11 +114,13 @@ Fill in:
 
    Existing deployments should run `db/dashboard-migration.sql` once to add dashboard telemetry fields and lock analytics tables to the service role.
 
+   Run `db/scalability-migration.sql` once to add corpus-versioned semantic answer caching. The application safely skips semantic caching until this migration exists.
+
 4. **Ingest content**
    ```bash
    npm run ingest
    ```
-   Edit `scripts/approved-pages.json` to control which pages are indexed and at what depth (`deep` or `shallow`).
+   Edit `ingestion-config.json` to control approved sitemap types, refresh intervals, URL overrides, and exclusions.
 
 5. **Run locally**
    ```bash
@@ -123,15 +130,32 @@ Fill in:
 
 ## Ingestion
 
-The ingestion pipeline:
-1. Fetches each approved URL
-2. Extracts clean text from the `<main>` tag, stripping nav/footer noise
-3. Splits content by heading sections, merging short sections
-4. Prepends a URL-specific summary to each chunk for embedding quality
-5. Generates embeddings via OpenAI
-6. Deletes existing rows for the URL and reinserts fresh chunks
+The production workflow runs daily and:
 
-Re-run `npm run ingest` whenever content changes. To automate, schedule the script via GitHub Actions.
+1. Discovers URLs from 16 explicitly approved WordPress sitemaps.
+2. Applies daily, weekly, or monthly check intervals based on content volatility.
+3. Excludes utility and `noindex` pages and retires expired dated events after a safety window.
+4. Extracts and chunks due pages, then compares deterministic cleaned-content hashes.
+5. Skips OpenAI entirely for unchanged pages.
+6. Embeds only new or changed chunks with `text-embedding-3-small`.
+7. Inserts validated replacement chunks before deleting old chunks, so an embedding or insert failure cannot erase the last good version.
+8. Advances the existing corpus version only when stored content actually changes.
+
+Incremental ingestion uses the existing `documents` table and requires no additional database migration. Stored chunks are deterministically fingerprinted in memory; unchanged pages only receive a refreshed `last_indexed_at` verification timestamp.
+
+Useful commands:
+
+```bash
+npm test                    # deterministic ingestion unit tests
+npm run test:ingestion:live # live sitemap and regression-page checks; no API key usage
+npm run ingest:discover     # inventory approved sitemap coverage; no API key usage
+npm run ingest:audit        # parse every eligible live page; no embedding calls
+npm run ingest              # production-capable incremental ingestion
+npm run ingest -- --force-check # fetch all pages but still skip matching hashes
+npm run ingest -- --force-embed # deliberate full re-embedding for maintenance
+```
+
+GitHub Actions uses concurrency protection so scheduled and manual ingestion runs cannot overlap. A missing or failed sitemap never causes pages owned by that sitemap to be retired.
 
 ## Deployment
 
@@ -176,6 +200,8 @@ See `wordpress/README.md` for Elementor Custom Code and plugin installation opti
 | `MIN_SIMILARITY_THRESHOLD` | Minimum cosine similarity to return results (default: `0.25`) |
 | `BASE_SITE_URL` | Base URL for resolving relative paths during ingestion |
 | `ESCALATION_CONTACT` | Contact info injected into fallback and pastoral responses |
+| `SEMANTIC_CACHE_THRESHOLD` | Minimum cosine similarity for semantic answer reuse (default: `0.94`) |
+| `SEMANTIC_CACHE_TTL_SECONDS` | Maximum semantic answer lifetime in seconds (default: seven days) |
 | `KV_REST_API_URL` | Upstash Redis REST URL used for global rate limiting and answer caching |
 | `KV_REST_API_TOKEN` | Upstash Redis REST token; server-side only |
 | `ADMIN_DASHBOARD_USERNAME` | HTTP Basic username protecting `/admin` |
@@ -186,3 +212,17 @@ See `wordpress/README.md` for Elementor Custom Code and plugin installation opti
 The authenticated dashboard at `/admin` reports query volume, fallback and escalation rates, retrieval sources, API errors, rate-limit activity, and browser-measured response latency. It also includes searchable raw visitor questions and generated answers for product and pastoral-support planning.
 
 Because visitor questions can contain sensitive information, use a unique 24+ character dashboard password, share access narrowly, and never expose the Supabase service role key to the browser. Dashboard analytics retain up to 90 days in the view; configure a database retention policy separately if older records should be deleted.
+
+## RAG Evaluation
+
+Run the end-to-end evaluation with:
+
+```bash
+npm run benchmark:rag
+```
+
+It reports retrieval `Precision@K`, `Recall@K`, MRR, and `nDCG@K`, followed by model-judged generation faithfulness, answer relevance, citation correctness, and groundedness. It also reports generation quality only for questions with perfect retrieval recall, which separates generation failures from retrieval failures. Detailed per-question results are saved under `tmp/rag-evals/`.
+
+Optional environment variables are `RAG_EVAL_K` (default `5`), `RAG_EVAL_LIMIT` (useful for smoke tests), `RAG_EVAL_GENERATION_MODEL`, and `RAG_EVAL_JUDGE_MODEL`.
+
+When no OpenAI API key is available, `npm run benchmark:rag:keyless` evaluates the deployed chat endpoint and uses local open-source NLI and sentence-embedding models for generation scoring. This mode requires Python, PyTorch, and Transformers. Its scores are reproducible proxies and should not be compared directly with scores from the OpenAI-judged mode without human calibration.
