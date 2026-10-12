@@ -62,6 +62,19 @@ test('maps all configured sitemap names and rejects unknown ones', () => {
   assert.equal(resolveSitemapPolicy('https://thewellaustin.com/unapproved-sitemap.xml', config), null);
 });
 
+test('checks sermons and every resource collection daily', () => {
+  const dailySitemaps = [
+    'resources-sitemap.xml',
+    'sermons-sitemap.xml',
+    'articleseries-sitemap.xml',
+    'videoseries-sitemap.xml',
+    'devotional-sitemap.xml',
+  ];
+  for (const name of dailySitemaps) {
+    assert.equal(resolveSitemapPolicy(`https://thewellaustin.com/${name}`, config)?.refreshHours, 24, name);
+  }
+});
+
 test('applies volatility overrides and exclusions', () => {
   assert.equal(applyUrlPolicy(source({ url: 'https://thewellaustin.com/events/fall-night' }), config)?.refreshHours, 24);
   assert.equal(applyUrlPolicy(source({ url: 'https://thewellaustin.com/beliefs' }), config)?.refreshHours, 720);

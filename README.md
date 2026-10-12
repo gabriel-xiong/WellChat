@@ -133,7 +133,7 @@ Fill in:
 The production workflow runs daily and:
 
 1. Discovers URLs from 16 explicitly approved WordPress sitemaps.
-2. Applies daily, weekly, or monthly check intervals based on content volatility.
+2. Checks events, retreats, jobs, sermons, and all resource collections daily; staff and community content weekly; and stable pages such as beliefs monthly.
 3. Excludes utility and `noindex` pages and retires expired dated events after a safety window.
 4. Extracts and chunks due pages, then compares deterministic cleaned-content hashes.
 5. Skips OpenAI entirely for unchanged pages.
