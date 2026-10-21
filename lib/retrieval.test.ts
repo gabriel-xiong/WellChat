@@ -51,3 +51,21 @@ test('merging marks duplicate vector candidates without discarding cosine simila
   assert.equal(merged[0].similarity, 0.61);
   assert.equal(merged[0].lexicalMatch, true);
 });
+
+test('direct collection pages outrank secondary stories for a one-word subject', () => {
+  const story = chunk({
+    id: 'story',
+    url: 'https://thewellaustin.com/stories/finding-belonging-at-the-college-retreat',
+    title: 'Finding Belonging at the College Retreat',
+    similarity: 0.25,
+    lexicalMatch: true,
+  });
+  const currentRetreat = chunk({
+    id: 'current-retreat',
+    url: 'https://thewellaustin.com/retreats/2026',
+    title: "2026 Women's and Men's Retreats",
+    similarity: 0.25,
+    lexicalMatch: true,
+  });
+  assert.equal(rerankChunks('Retreat', [story, currentRetreat], 1)[0].id, 'current-retreat');
+});

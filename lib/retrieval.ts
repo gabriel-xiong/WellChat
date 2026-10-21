@@ -94,11 +94,21 @@ function lexicalBoost(question: string, chunk: MatchDocument): number {
   }, 0);
 }
 
+function directCollectionBoost(question: string, chunk: MatchDocument): number {
+  const subjectTerms = new Set(selectLexicalSearchTerms(question).map((token) => token.replace(/s$/, '')));
+  try {
+    const collection = new URL(chunk.url).pathname.split('/').filter(Boolean)[0]?.replace(/s$/, '');
+    return collection && subjectTerms.has(collection) ? 0.3 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function rerankChunks(question: string, chunks: MatchDocument[], limit = 5): MatchDocument[] {
   return [...chunks]
     .sort((left, right) => {
-      const leftScore = left.similarity + lexicalBoost(question, left);
-      const rightScore = right.similarity + lexicalBoost(question, right);
+      const leftScore = left.similarity + lexicalBoost(question, left) + directCollectionBoost(question, left);
+      const rightScore = right.similarity + lexicalBoost(question, right) + directCollectionBoost(question, right);
       return (rightScore + (right.lexicalMatch ? 0.25 : 0))
         - (leftScore + (left.lexicalMatch ? 0.25 : 0));
     })
