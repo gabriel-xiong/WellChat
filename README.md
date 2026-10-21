@@ -134,7 +134,7 @@ The production workflow runs daily and:
 
 1. Discovers URLs from 16 explicitly approved WordPress sitemaps.
 2. Checks events, retreats, jobs, sermons, and all resource collections daily; staff and community content weekly; and stable pages such as beliefs monthly.
-3. Excludes utility and `noindex` pages and retires expired dated events after a safety window.
+3. Excludes utility and `noindex` pages, retires expired dated events, and safely removes sitemap orphans only after a conclusive `404`/`410`, redirect to a discovered replacement, `noindex`, or expired-event signal.
 4. Extracts and chunks due pages, then compares deterministic cleaned-content hashes.
 5. Skips OpenAI entirely for unchanged pages.
 6. Embeds only new or changed chunks with `text-embedding-3-small`.

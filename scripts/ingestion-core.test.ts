@@ -18,6 +18,7 @@ import {
   isPageDue,
   isEventExpired,
   normalizeSourceText,
+  orphanRetirementReason,
   parseSitemapEntries,
   resolveSitemapPolicy,
   shouldEmbedPage,
@@ -136,6 +137,48 @@ test('event expiration allows a safety grace window', () => {
   assert.equal(isEventExpired(end, new Date('2026-09-26T12:00:00Z')), false);
   assert.equal(isEventExpired(end, new Date('2026-09-28T12:00:00Z')), true);
   assert.equal(isEventExpired(null, new Date('2026-09-28T12:00:00Z')), false);
+});
+
+test('retires sitemap orphans only with conclusive safe signals', () => {
+  const discovered = new Set(['https://thewellaustin.com/events/current']);
+  const now = new Date('2026-10-20T12:00:00Z');
+  assert.equal(orphanRetirementReason('https://thewellaustin.com/events/old', 404, null, '', '', discovered, now), 'HTTP 404');
+  assert.match(orphanRetirementReason(
+    'https://thewellaustin.com/events/alias',
+    301,
+    '/events/current/',
+    '',
+    '',
+    discovered,
+    now
+  ) ?? '', /redirected to/);
+  assert.equal(orphanRetirementReason(
+    'https://thewellaustin.com/events/unknown',
+    301,
+    '/events/not-discovered/',
+    '',
+    '',
+    discovered,
+    now
+  ), null);
+  assert.equal(orphanRetirementReason(
+    'https://thewellaustin.com/resources/archived',
+    200,
+    null,
+    '<meta name="robots" content="noindex">',
+    'Archived resource',
+    discovered,
+    now
+  ), 'noindex');
+  assert.equal(orphanRetirementReason(
+    'https://thewellaustin.com/resources/ambiguous',
+    200,
+    null,
+    '<main>Still available</main>',
+    'Still available',
+    discovered,
+    now
+  ), null);
 });
 
 test('extracts main content, removes scripts and preserves nested heading text', () => {

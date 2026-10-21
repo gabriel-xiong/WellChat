@@ -16,6 +16,7 @@ import {
   isNoIndexPage,
   isPageDue,
   normalizeSourceText,
+  orphanRetirementReason,
   PageChunk,
   parseSitemapEntries,
   resolveSitemapPolicy,
@@ -69,6 +70,7 @@ interface RunStats {
   indexed: number;
   excluded: number;
   expired: number;
+  retired: number;
   failed: number;
   embeddedTokensApproximation: number;
 }
@@ -296,6 +298,48 @@ async function replacePageSafely(existing: StoredDocument[], chunks: PageChunk[]
   }
 }
 
+async function retireSafeOrphans(
+  stored: Map<string, StoredDocument[]>,
+  discovered: Map<string, DiscoveredSource>,
+  options: RunOptions,
+  stats: RunStats
+): Promise<boolean> {
+  let changed = false;
+  const discoveredUrls = new Set(discovered.keys());
+  for (const [url, documents] of stored) {
+    if (discoveredUrls.has(url)) continue;
+    try {
+      const response = await fetch(url, {
+        redirect: 'manual',
+        headers: { 'User-Agent': 'TheWellIngest/2.0' },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      const html = response.status === 200 ? await response.text() : '';
+      const text = html ? htmlToText(html) : '';
+      const reason = orphanRetirementReason(
+        url,
+        response.status,
+        response.headers.get('location'),
+        html,
+        text,
+        discoveredUrls,
+        new Date()
+      );
+      if (!reason) {
+        console.warn(`[retained:orphan] ${url} (no conclusive removal signal)`);
+        continue;
+      }
+      if (!options.dryRun) await deleteDocuments(documents.map((document) => document.id));
+      stats.retired += 1;
+      changed = changed || documents.length > 0;
+      console.log(`[${options.dryRun ? 'would-retire' : 'retired'}:orphan] ${url} (${reason})`);
+    } catch (error) {
+      console.warn(`[retained:orphan] ${url} (inspection failed: ${error instanceof Error ? error.message : error})`);
+    }
+  }
+  return changed;
+}
+
 async function activateNewCorpusVersion(): Promise<void> {
   const version = crypto.randomUUID();
   const response = await fetch(`${SUPABASE_URL}/rest/v1/rag_corpus_state?on_conflict=singleton`, {
@@ -410,6 +454,7 @@ async function main(): Promise<void> {
     indexed: 0,
     excluded: 0,
     expired: 0,
+    retired: 0,
     failed: 0,
     embeddedTokensApproximation: 0,
   };
@@ -419,6 +464,9 @@ async function main(): Promise<void> {
   let corpusChanged = false;
   for (const source of selected) {
     if (await processSource(source, stored.get(source.url) ?? [], options, stats)) corpusChanged = true;
+  }
+  if (!options.limit && discovery.failedSitemaps.length === 0) {
+    if (await retireSafeOrphans(stored, discovery.sources, options, stats)) corpusChanged = true;
   }
   if (corpusChanged && !options.dryRun) {
     try {

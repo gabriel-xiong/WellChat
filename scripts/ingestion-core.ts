@@ -256,6 +256,27 @@ export function isEventExpired(endDate: Date | null, now: Date, graceHours = 48)
   return Boolean(endDate && now.getTime() > endDate.getTime() + graceHours * 60 * 60 * 1000);
 }
 
+export function orphanRetirementReason(
+  url: string,
+  status: number,
+  redirectLocation: string | null,
+  html: string,
+  text: string,
+  discoveredUrls: ReadonlySet<string>,
+  now: Date
+): string | null {
+  if (status === 404 || status === 410) return `HTTP ${status}`;
+  if (status >= 300 && status < 400 && redirectLocation) {
+    const target = canonicalizeUrl(redirectLocation, url);
+    if (target !== canonicalizeUrl(url, url) && discoveredUrls.has(target)) return `redirected to ${target}`;
+  }
+  if (status !== 200) return null;
+  if (isNoIndexPage(html)) return 'noindex';
+  if (/\/(?:events|retreats)\//i.test(new URL(url).pathname)
+    && isEventExpired(extractEventEndDate(html, text, url), now)) return 'expired event';
+  return null;
+}
+
 export function splitByHeadings(text: string): Array<{ section: string; content: string }> {
   const parts = text.split(/\n(?=# )/g).map((part) => part.trim()).filter(Boolean);
   if (parts.length <= 1) return [{ section: 'page', content: text }];
