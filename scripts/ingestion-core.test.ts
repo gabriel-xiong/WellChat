@@ -17,6 +17,7 @@ import {
   isNoIndexPage,
   isPageDue,
   isEventExpired,
+  normalizeSourceText,
   parseSitemapEntries,
   resolveSitemapPolicy,
   shouldEmbedPage,
@@ -146,6 +147,25 @@ test('extracts main content, removes scripts and preserves nested heading text',
   assert.match(text, /# What We Believe/);
   assert.match(text, /Meaningful body content/);
   assert.doesNotMatch(text, /Ignore me|secret/);
+});
+
+test('staff hashes ignore randomized More Staff recommendations', () => {
+  const profile = '# Frank Katalayi Worship Director\nStable biography and contact information for Frank.';
+  const first = normalizeSourceText(
+    `${profile}\n\nOur College Team -->\n# More Staff\n# Person A Read Bio Contact\n# Person B Read Bio Contact`,
+    'staff'
+  );
+  const second = normalizeSourceText(
+    `${profile}\n\nOur College Team -->\n# More Staff\n# Person C Read Bio Contact\n# Person D Read Bio Contact`,
+    'staff'
+  );
+  assert.equal(first, profile);
+  assert.equal(second, profile);
+  const firstChunks = buildChunks('https://example.com/team/frank', 'Frank', 'deep', 'staff', first);
+  const secondChunks = buildChunks('https://example.com/team/frank', 'Frank', 'deep', 'staff', second);
+  assert.equal(contentHash('Frank', firstChunks), contentHash('Frank', secondChunks));
+  assert.match(normalizeSourceText(`${profile}\n# More Staff\n# Person A`, 'staff'), /Stable biography/);
+  assert.equal(normalizeSourceText('More Staff is mentioned in an ordinary resource.', 'resource'), 'More Staff is mentioned in an ordinary resource.');
 });
 
 test('content hashes are deterministic and change with answer-bearing content', () => {

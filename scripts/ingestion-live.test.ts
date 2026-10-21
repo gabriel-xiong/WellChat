@@ -10,6 +10,7 @@ import {
   extractTitle,
   htmlToText,
   IngestionConfig,
+  normalizeSourceText,
   parseSitemapEntries,
   resolveSitemapPolicy,
 } from './ingestion-core';
@@ -64,3 +65,11 @@ for (const url of [`${baseUrl}/sermons/lament/`, `${baseUrl}/retreats/2026/`, `$
     assert.ok(chunks.every((chunk) => chunk.content.length >= 20));
   });
 }
+
+test('live staff extraction excludes the randomized More Staff carousel', async () => {
+  const response = await fetch(`${baseUrl}/team/frank/`);
+  assert.equal(response.ok, true);
+  const text = normalizeSourceText(htmlToText(await response.text()), 'staff');
+  assert.match(text, /Frank Katalayi/i);
+  assert.doesNotMatch(text, /More Staff|Read Bio Contact/i);
+});

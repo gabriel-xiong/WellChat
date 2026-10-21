@@ -13,6 +13,7 @@ import {
   htmlToText,
   IngestionConfig,
   isNoIndexPage,
+  normalizeSourceText,
   isEventExpired,
   parseSitemapEntries,
   resolveSitemapPolicy,
@@ -74,7 +75,7 @@ async function main(): Promise<void> {
           continue;
         }
         const title = extractTitle(html);
-        const text = htmlToText(html);
+        const text = normalizeSourceText(htmlToText(html), source.contentType);
         if ((source.contentType === 'event' || source.contentType === 'retreat')
           && isEventExpired(extractEventEndDate(html, text, source.url), new Date())) {
           expired.push(source.url);

@@ -185,6 +185,20 @@ export function htmlToText(html: string): string {
   return normalizePlainText(cleanedText).replaceAll(' # ', '\n# ');
 }
 
+export function normalizeSourceText(text: string, contentType: string): string {
+  if (contentType !== 'staff') return text;
+
+  // Staff profiles include a randomized recommendation carousel inside <main>.
+  // It is unrelated to the profile answer and must not invalidate the page hash.
+  const recommendationBlock = text.match(/\bOur College Team\s*-->\s*(?:\n#?\s*)?More Staff\b/i);
+  if (recommendationBlock?.index !== undefined) {
+    return text.slice(0, recommendationBlock.index).trim();
+  }
+
+  const fallbackMarker = text.match(/\n#\s*More Staff\b/i);
+  return fallbackMarker?.index !== undefined ? text.slice(0, fallbackMarker.index).trim() : text;
+}
+
 export function shouldEmbedPage(hash: string, storedHash: string | null | undefined, forceEmbed = false): boolean {
   return forceEmbed || !storedHash || hash !== storedHash;
 }

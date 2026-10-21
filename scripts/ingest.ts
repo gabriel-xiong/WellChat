@@ -15,6 +15,7 @@ import {
   isEventExpired,
   isNoIndexPage,
   isPageDue,
+  normalizeSourceText,
   PageChunk,
   parseSitemapEntries,
   resolveSitemapPolicy,
@@ -332,7 +333,7 @@ async function processSource(
     }
 
     const title = extractTitle(html);
-    const text = htmlToText(html);
+    const text = normalizeSourceText(htmlToText(html), source.contentType);
     if (text.length < 20) throw new Error(`Extracted content is unexpectedly short (${text.length} characters).`);
     if ((source.contentType === 'event' || source.contentType === 'retreat')
       && isEventExpired(extractEventEndDate(html, text, source.url), new Date())) {
