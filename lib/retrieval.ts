@@ -7,6 +7,7 @@ export interface MatchDocument {
   depth: string | null;
   last_indexed_at: string | null;
   similarity: number;
+  lexicalMatch?: boolean;
 }
 
 const STOP_WORDS = [
@@ -33,6 +34,24 @@ const STOP_WORDS = [
   'you',
 ];
 
+const GENERIC_SEARCH_WORDS = new Set([
+  'any',
+  'available',
+  'church',
+  'find',
+  'have',
+  'info',
+  'information',
+  'looking',
+  'resource',
+  'resources',
+  'sermon',
+  'sermons',
+  'tell',
+  'well',
+  'austin',
+]);
+
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -40,6 +59,23 @@ function tokenize(text: string): string[] {
     .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
     .filter((token) => token.length > 2 && !STOP_WORDS.includes(token));
+}
+
+export function selectLexicalSearchTerms(question: string, limit = 3): string[] {
+  return [...new Set(tokenize(question).filter((token) => !GENERIC_SEARCH_WORDS.has(token)))].slice(0, limit);
+}
+
+export function mergeRetrievalCandidates(
+  vectorCandidates: MatchDocument[],
+  lexicalCandidates: MatchDocument[]
+): MatchDocument[] {
+  const merged = new Map(vectorCandidates.map((candidate) => [candidate.id, { ...candidate }]));
+  for (const candidate of lexicalCandidates) {
+    const existing = merged.get(candidate.id);
+    if (existing) existing.lexicalMatch = true;
+    else merged.set(candidate.id, { ...candidate, lexicalMatch: true });
+  }
+  return [...merged.values()];
 }
 
 function lexicalBoost(question: string, chunk: MatchDocument): number {
@@ -63,7 +99,8 @@ export function rerankChunks(question: string, chunks: MatchDocument[], limit = 
     .sort((left, right) => {
       const leftScore = left.similarity + lexicalBoost(question, left);
       const rightScore = right.similarity + lexicalBoost(question, right);
-      return rightScore - leftScore;
+      return (rightScore + (right.lexicalMatch ? 0.25 : 0))
+        - (leftScore + (left.lexicalMatch ? 0.25 : 0));
     })
     .slice(0, limit);
 }

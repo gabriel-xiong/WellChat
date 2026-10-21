@@ -1,6 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { after } from 'next/server';
-import { MatchDocument, rerankChunks } from '@/lib/retrieval';
+import {
+  MatchDocument,
+  mergeRetrievalCandidates,
+  rerankChunks,
+  selectLexicalSearchTerms,
+} from '@/lib/retrieval';
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 import { classifyQuestion } from '@/lib/chat-analytics';
 
@@ -356,6 +361,30 @@ function getSupabaseClient() {
   }
 
   return supabaseClient;
+}
+
+async function findLexicalCandidates(question: string): Promise<MatchDocument[]> {
+  const terms = selectLexicalSearchTerms(question);
+  if (!terms.length) return [];
+  const filter = terms.flatMap((term) => [
+    `title.ilike.%${term}%`,
+    `section.ilike.%${term}%`,
+    `url.ilike.%${term}%`,
+  ]).join(',');
+  const { data, error } = await getSupabaseClient()
+    .from('documents')
+    .select('id,url,title,section,content,depth,last_indexed_at')
+    .or(filter)
+    .limit(20);
+  if (error) {
+    console.warn('Lexical candidate lookup skipped:', error.message);
+    return [];
+  }
+  return ((data ?? []) as Omit<MatchDocument, 'similarity'>[]).map((candidate) => ({
+    ...candidate,
+    similarity: MIN_SIMILARITY_THRESHOLD,
+    lexicalMatch: true,
+  }));
 }
 
 function isSemanticCacheEligible(question: string): boolean {
@@ -874,7 +903,11 @@ export async function POST(request: Request) {
         limit_count: 12,
       });
       if (retrieval.error) throw new Error(`Supabase match_documents failed: ${retrieval.error.message}`);
-      data = retrieval.data;
+      const lexicalCandidates = await findLexicalCandidates(question);
+      data = mergeRetrievalCandidates(
+        (retrieval.data ?? []) as MatchDocument[],
+        lexicalCandidates
+      );
     } catch (error) {
       console.error('Retrieval unavailable; returning approved resources:', error);
       const fallback = buildDegradedAnswer(question);
