@@ -8,7 +8,7 @@ The system is deployed inside an existing WordPress site, but the retrieval, gen
 
 | | |
 |---|---|
-| **Problem** | Help visitors find accurate information without turning a language model into an unsupervised pastoral authority |
+| **Problem** | Help church visitors quickly find accurate, trustworthy information without manually navigating the website.  |
 | **Core system** | Incremental website ingestion → pgvector retrieval → lexical reranking → streamed GPT-4o mini response |
 | **Production concerns** | Corpus freshness, cache invalidation, duplicate requests, rate limits, graceful degradation, privacy, and host-site isolation |
 | **Stack** | Next.js, TypeScript, Supabase/Postgres + pgvector, OpenAI, Upstash Redis, Vercel |
