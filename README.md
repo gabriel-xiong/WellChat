@@ -16,33 +16,37 @@ The system is deployed inside an existing WordPress site, but the retrieval, gen
 
 ## Architecture
 
+### Content indexing
+
 ```mermaid
-flowchart LR
-    subgraph Offline["Scheduled content pipeline"]
-        S[Approved WordPress sitemaps] --> D[Discover and classify URLs]
-        D --> X[Extract and section-aware chunk]
-        X --> H{Content hash changed?}
-        H -->|No| K[Refresh verification timestamp]
-        H -->|Yes| E[Generate embeddings]
-        E --> P[(Supabase + pgvector)]
-    end
+flowchart TB
+    A["Approved WordPress sitemaps"]
+    A --> B["Discover and classify URLs"]
+    B --> C["Extract and section-aware chunk"]
+    C --> D{"Content changed?"}
+    D -->|No| E["Refresh verification timestamp"]
+    D -->|Yes| F["Generate embeddings"]
+    F --> G[("Supabase + pgvector")]
+```
 
-    subgraph Online["Visitor request path"]
-        U[WordPress visitor] --> W[Sandboxed iframe widget]
-        W --> A[Next.js chat route]
-        A --> G{Safety / fallback route}
-        G -->|Crisis or pastoral| F[Fixed approved response]
-        G -->|General question| C{Versioned cache hit?}
-        C -->|Yes| W
-        C -->|No| R[Vector + lexical retrieval]
-        P --> R
-        R --> Q[Hybrid rerank to top context]
-        Q --> L[GPT-4o mini stream]
-        L --> W
-        A --> T[(Telemetry and query logs)]
-    end
+### Visitor request
 
-    A <--> Z[(Redis rate limit + single-flight)]
+```mermaid
+flowchart TB
+    A["WordPress visitor"] --> B["Sandboxed iframe widget"]
+    B --> C["Next.js chat route"]
+    C --> D{"Safety route?"}
+
+    D -->|Crisis or pastoral| E["Return approved fixed response"]
+    D -->|General question| F{"Versioned cache hit?"}
+
+    F -->|Yes| G["Stream cached answer"]
+    F -->|No| H["Vector + lexical retrieval"]
+    H --> I["Rerank top context"]
+    I --> J["Stream grounded answer"]
+
+    C -.-> K[("Redis rate limit + single-flight")]
+    C -.-> L[("Telemetry + query logs")]
 ```
 
 ## Engineering decisions
