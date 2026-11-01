@@ -56,7 +56,7 @@ const MONTHS = [
 ] as const;
 
 const DOMAIN_TERMS = [
-  'beliefs', 'community', 'events', 'giving', 'jobs', 'lament', 'ministries', 'missions', 'podcast',
+  'beliefs', 'community', 'events', 'giving', 'jobs', 'lament', 'ministries', 'mission', 'missions', 'podcast',
   'resources', 'retreat', 'sermons', 'serve', 'staff', 'sundays', 'worship',
 ];
 

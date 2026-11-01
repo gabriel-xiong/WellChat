@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
-import { matchingApprovedResourceUrls } from './retrieval-resources';
+import { isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from './retrieval-resources';
 
 function chunk(id: string, overrides: Partial<MatchDocument> = {}): MatchDocument {
   return { id, url: `https://thewellaustin.com/${id}`, title: id, section: 'Page', content: 'General information from The Well.', depth: 'deep', last_indexed_at: null, similarity: 0.4, ...overrides };
@@ -74,4 +74,11 @@ test('diagnostics explain rank inputs and final selection', () => {
 test('benchmark and production share the complete authoritative resource map', () => {
   assert.deepEqual(matchingApprovedResourceUrls('Who are the pastors or staff?'), ['https://thewellaustin.com/team']);
   assert.deepEqual(matchingApprovedResourceUrls('What is the mission of The Well?'), ['https://thewellaustin.com/mission']);
+});
+
+test('infers exact subject pages without confusing singular and plural collections', () => {
+  assert.equal(isInferredAuthoritativeUrl('any resources on lament?', 'https://thewellaustin.com/sermons/lament'), true);
+  assert.equal(isInferredAuthoritativeUrl('Retreat', 'https://thewellaustin.com/retreats/2026'), true);
+  assert.equal(isInferredAuthoritativeUrl('What is our mission?', 'https://thewellaustin.com/mission'), true);
+  assert.equal(isInferredAuthoritativeUrl('What is our mission?', 'https://thewellaustin.com/missions'), false);
 });

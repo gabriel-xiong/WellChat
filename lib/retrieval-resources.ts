@@ -1,3 +1,5 @@
+import { selectLexicalSearchTerms } from './retrieval';
+
 export const APPROVED_RESOURCE_LINKS = [
   { title: 'Sundays With Us', url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'worship', 'visit', 'location', 'parking'] },
   { title: 'Community Groups', url: 'https://thewellaustin.com/community', keywords: ['community', 'group', 'connect'] },
@@ -19,4 +21,19 @@ export function matchingApprovedResourceUrls(question: string): string[] {
   return APPROVED_RESOURCE_LINKS
     .filter((resource) => resource.keywords.some((keyword) => normalized.includes(keyword)))
     .map((resource) => resource.url);
+}
+
+export function isInferredAuthoritativeUrl(question: string, url: string): boolean {
+  const terms = selectLexicalSearchTerms(question);
+  const approvedUrls = matchingApprovedResourceUrls(question);
+  const segments = new URL(url).pathname.split('/').filter(Boolean);
+  const collection = segments[0]?.replace(/s$/, '');
+  const normalizedTerms = new Set(terms.map((term) => term.replace(/s$/, '')));
+  const exactSubjectSlug = terms.includes(segments.at(-1) ?? '');
+  const isCollectionPage = segments.length === 1
+    || (collection === 'retreat' && segments.length === 2 && /^\d{4}$/.test(segments[1]));
+  return exactSubjectSlug || (
+    approvedUrls.length === 0
+    && Boolean(collection && normalizedTerms.has(collection) && isCollectionPage)
+  );
 }

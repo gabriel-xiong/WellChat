@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync } from 'node:fs';
 import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from '../lib/retrieval';
-import { matchingApprovedResourceUrls } from '../lib/retrieval-resources';
+import { isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from '../lib/retrieval-resources';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -155,13 +155,8 @@ async function retrieveCandidates(question: string): Promise<{ vector: MatchDocu
   if (authoritativeResult.error) throw new Error(`Authoritative lookup failed: ${authoritativeResult.error.message}`);
   const authoritative = ((authoritativeResult.data ?? []) as Omit<MatchDocument, 'similarity'>[])
     .map((candidate) => ({ ...candidate, similarity: 0 }));
-  const normalizedTerms = new Set(terms.map((term) => term.replace(/s$/, '')));
   for (const candidate of lexicalMap.values()) {
-    const segments = new URL(candidate.url).pathname.split('/').filter(Boolean);
-    const collection = segments[0]?.replace(/s$/, '');
-    const isCollectionPage = segments.length === 1
-      || (collection === 'retreat' && segments.length === 2 && /^\d{4}$/.test(segments[1]));
-    if (collection && normalizedTerms.has(collection) && isCollectionPage && !authoritative.some((entry) => entry.id === candidate.id)) {
+    if (isInferredAuthoritativeUrl(question, candidate.url) && !authoritative.some((entry) => entry.id === candidate.id)) {
       authoritative.push(candidate);
     }
   }

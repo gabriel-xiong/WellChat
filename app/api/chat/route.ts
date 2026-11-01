@@ -11,7 +11,7 @@ import {
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 import { classifyQuestion } from '@/lib/chat-analytics';
 import { isGeneratedFallback } from '@/lib/chat-quality';
-import { APPROVED_RESOURCE_LINKS, matchingApprovedResourceUrls } from '@/lib/retrieval-resources';
+import { APPROVED_RESOURCE_LINKS, isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from '@/lib/retrieval-resources';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -442,13 +442,8 @@ async function findLexicalCandidates(question: string): Promise<LexicalCandidate
       }
     }
   }
-  const normalizedTerms = new Set(terms.map((term) => term.replace(/s$/, '')));
   for (const candidate of lexical.values()) {
-    const segments = new URL(candidate.url).pathname.split('/').filter(Boolean);
-    const collection = segments[0]?.replace(/s$/, '');
-    const isCollectionPage = segments.length === 1
-      || (collection === 'retreat' && segments.length === 2 && /^\d{4}$/.test(segments[1]));
-    if (collection && normalizedTerms.has(collection) && isCollectionPage) authoritative.set(candidate.id, candidate);
+    if (isInferredAuthoritativeUrl(question, candidate.url)) authoritative.set(candidate.id, candidate);
   }
 
   return {
