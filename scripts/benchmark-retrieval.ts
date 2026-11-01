@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync } from 'node:fs';
 import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from '../lib/retrieval';
+import { matchingApprovedResourceUrls } from '../lib/retrieval-resources';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -56,15 +57,6 @@ const REGRESSION_SET = JSON.parse(
   readFileSync(new URL('../evals/retrieval-regressions.json', import.meta.url), 'utf8')
 ) as Array<EvalQuestion & { source: string }>;
 const EVAL_SET: EvalQuestion[] = [...BASE_EVAL_SET, ...REGRESSION_SET];
-
-const AUTHORITATIVE_RESOURCES = [
-  { url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'visit', 'location', 'parking'] },
-  { url: 'https://thewellaustin.com/community', keywords: ['community', 'group'] },
-  { url: 'https://thewellaustin.com/serve', keywords: ['serve', 'volunteer'] },
-  { url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate'] },
-  { url: 'https://thewellaustin.com/events', keywords: ['event', 'happening', 'calendar', 'this month'] },
-  { url: 'https://thewellaustin.com/jobs', keywords: ['job', 'jobs', 'career', 'careers', 'employment'] },
-] as const;
 
 function assertEnv(): void {
   if (!SUPABASE_URL) throw new Error('NEXT_PUBLIC_SUPABASE_URL is required.');
@@ -156,10 +148,7 @@ async function retrieveCandidates(question: string): Promise<{ vector: MatchDocu
       }
     }
   }
-  const normalized = question.toLowerCase();
-  const authoritativeUrls = AUTHORITATIVE_RESOURCES
-    .filter((resource) => resource.keywords.some((keyword) => normalized.includes(keyword)))
-    .map((resource) => resource.url);
+  const authoritativeUrls = matchingApprovedResourceUrls(question);
   const authoritativeResult = authoritativeUrls.length
     ? await supabase.from('documents').select(select).in('url', authoritativeUrls)
     : { data: [], error: null };

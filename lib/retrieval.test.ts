@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
+import { matchingApprovedResourceUrls } from './retrieval-resources';
 
 function chunk(id: string, overrides: Partial<MatchDocument> = {}): MatchDocument {
   return { id, url: `https://thewellaustin.com/${id}`, title: id, section: 'Page', content: 'General information from The Well.', depth: 'deep', last_indexed_at: null, similarity: 0.4, ...overrides };
@@ -68,4 +69,9 @@ test('diagnostics explain rank inputs and final selection', () => {
   assert.equal(result.diagnostics[0].authoritativeRank, 1);
   assert.ok(result.diagnostics[0].reciprocalRankScore > 0);
   assert.ok(result.diagnostics[0].confidence >= 0.9);
+});
+
+test('benchmark and production share the complete authoritative resource map', () => {
+  assert.deepEqual(matchingApprovedResourceUrls('Who are the pastors or staff?'), ['https://thewellaustin.com/team']);
+  assert.deepEqual(matchingApprovedResourceUrls('What is the mission of The Well?'), ['https://thewellaustin.com/mission']);
 });
