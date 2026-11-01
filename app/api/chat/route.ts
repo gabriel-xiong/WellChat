@@ -141,7 +141,7 @@ const APPROVED_RESOURCE_LINKS = [
   { title: 'Ministries', url: 'https://thewellaustin.com/ministries', keywords: ['ministry', 'kids', 'children', 'youth'] },
   { title: 'What We Believe', url: 'https://thewellaustin.com/beliefs', keywords: ['believe', 'belief', 'scripture', 'doctrine', 'faith'] },
   { title: 'Our Team', url: 'https://thewellaustin.com/team', keywords: ['team', 'staff', 'pastor', 'contact'] },
-  { title: 'Events', url: 'https://thewellaustin.com/events', keywords: ['event', 'calendar', 'upcoming'] },
+  { title: 'Events', url: 'https://thewellaustin.com/events', keywords: ['event', 'happening', 'calendar', 'upcoming', 'this month', 'this week'] },
   { title: 'Sermons', url: 'https://thewellaustin.com/sermons', keywords: ['sermon', 'message', 'teaching'] },
   { title: 'Podcast', url: 'https://thewellaustin.com/podcast', keywords: ['podcast'] },
   { title: 'Mission and Vision', url: 'https://thewellaustin.com/mission', keywords: ['mission', 'vision', 'values'] },
@@ -371,22 +371,38 @@ function getSupabaseClient() {
 
 async function findLexicalCandidates(question: string): Promise<MatchDocument[]> {
   const terms = selectLexicalSearchTerms(question);
-  if (!terms.length) return [];
-  const filter = terms.flatMap((term) => [
-    `title.ilike.%${term}%`,
-    `section.ilike.%${term}%`,
-    `url.ilike.%${term}%`,
-  ]).join(',');
-  const { data, error } = await getSupabaseClient()
-    .from('documents')
-    .select('id,url,title,section,content,depth,last_indexed_at')
-    .or(filter)
-    .limit(50);
-  if (error) {
-    console.warn('Lexical candidate lookup skipped:', error.message);
-    return [];
+  const approvedUrls = APPROVED_RESOURCE_LINKS
+    .filter((resource) => includesKeyword(question, [...resource.keywords]))
+    .map((resource) => resource.url);
+  const select = 'id,url,title,section,content,depth,content_type,last_indexed_at';
+  const requests = [];
+
+  if (terms.length) {
+    const filter = terms.flatMap((term) => [
+      `title.ilike.%${term}%`,
+      `section.ilike.%${term}%`,
+      `url.ilike.%${term}%`,
+    ]).join(',');
+    requests.push(getSupabaseClient().from('documents').select(select).or(filter).limit(50));
   }
-  return ((data ?? []) as Omit<MatchDocument, 'similarity'>[]).map((candidate) => ({
+  if (approvedUrls.length) {
+    requests.push(getSupabaseClient().from('documents').select(select).in('url', approvedUrls));
+  }
+
+  if (!requests.length) return [];
+  const results = await Promise.all(requests);
+  const candidates = new Map<string, Omit<MatchDocument, 'similarity'>>();
+  for (const result of results) {
+    if (result.error) {
+      console.warn('Lexical candidate lookup partially skipped:', result.error.message);
+      continue;
+    }
+    for (const candidate of (result.data ?? []) as Omit<MatchDocument, 'similarity'>[]) {
+      candidates.set(candidate.id, candidate);
+    }
+  }
+
+  return [...candidates.values()].map((candidate) => ({
     ...candidate,
     similarity: MIN_SIMILARITY_THRESHOLD,
     lexicalMatch: true,

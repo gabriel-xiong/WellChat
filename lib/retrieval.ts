@@ -5,6 +5,7 @@ export interface MatchDocument {
   section: string | null;
   content: string;
   depth: string | null;
+  content_type?: string | null;
   last_indexed_at: string | null;
   similarity: number;
   lexicalMatch?: boolean;
@@ -144,18 +145,36 @@ function lexicalBoost(question: string, chunk: MatchDocument): number {
 function directCollectionBoost(question: string, chunk: MatchDocument): number {
   const subjectTerms = new Set(selectLexicalSearchTerms(question).map((token) => token.replace(/s$/, '')));
   try {
-    const collection = new URL(chunk.url).pathname.split('/').filter(Boolean)[0]?.replace(/s$/, '');
-    return collection && subjectTerms.has(collection) ? 0.3 : 0;
+    const pathSegments = new URL(chunk.url).pathname.split('/').filter(Boolean);
+    const collection = pathSegments[0]?.replace(/s$/, '');
+    const matchesCollection = collection && subjectTerms.has(collection);
+    const matchesEventType = EVENT_INTENT_PATTERN.test(question)
+      && (chunk.content_type === 'event' || chunk.content_type === 'retreat');
+    const collectionIndex = EVENT_INTENT_PATTERN.test(question)
+      && pathSegments.length === 1
+      && collection === 'event';
+    return (matchesCollection || matchesEventType ? 0.3 : 0) + (collectionIndex ? 0.2 : 0);
   } catch {
     return 0;
   }
 }
 
+function temporalEvidenceBoost(question: string, chunk: MatchDocument): number {
+  const evidence = `${chunk.section || ''} ${chunk.content.slice(0, 800)}`.toLowerCase();
+  const requestedMonth = monthTerms(question, new Date());
+  const hasRequestedMonth = requestedMonth.some((term) => new RegExp(`\\b${term}\\b`).test(evidence));
+  const asksForTime = /\b(?:when|time|times|date|schedule|month|week|today|tomorrow)\b/i.test(question);
+  const hasClockTime = /\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i.test(evidence);
+  return (hasRequestedMonth ? 0.2 : 0) + (asksForTime && hasClockTime ? 0.12 : 0);
+}
+
 export function rerankChunks(question: string, chunks: MatchDocument[], limit = 5): MatchDocument[] {
   return [...chunks]
     .sort((left, right) => {
-      const leftScore = left.similarity + lexicalBoost(question, left) + directCollectionBoost(question, left);
-      const rightScore = right.similarity + lexicalBoost(question, right) + directCollectionBoost(question, right);
+      const leftScore = left.similarity + lexicalBoost(question, left) + directCollectionBoost(question, left)
+        + temporalEvidenceBoost(question, left);
+      const rightScore = right.similarity + lexicalBoost(question, right) + directCollectionBoost(question, right)
+        + temporalEvidenceBoost(question, right);
       return (rightScore + (right.lexicalMatch ? 0.25 : 0))
         - (leftScore + (left.lexicalMatch ? 0.25 : 0));
     })
