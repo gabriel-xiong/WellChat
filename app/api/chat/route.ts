@@ -8,6 +8,7 @@ import {
 } from '@/lib/retrieval';
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 import { classifyQuestion } from '@/lib/chat-analytics';
+import { isGeneratedFallback } from '@/lib/chat-quality';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -65,6 +66,9 @@ For shallow-indexed pages like community groups, sermons, stories,
 and podcast, provide a brief description and link to the page
 rather than attempting detailed answers.
 
+For event lists, preserve each event's exact title and associated date.
+Never shift a date from one event to an adjacent event in a list.
+
 For questions about what The Well believes, answer factually
 from the provided content. Do not give personal spiritual advice,
 make theological recommendations, or tell someone what they
@@ -118,7 +122,9 @@ const TIME_SENSITIVE_KEYWORDS = [
   'tomorrow',
   'tonight',
   'this week',
+  'this month',
   'next week',
+  'next month',
   'current',
   'latest',
   'upcoming',
@@ -375,7 +381,7 @@ async function findLexicalCandidates(question: string): Promise<MatchDocument[]>
     .from('documents')
     .select('id,url,title,section,content,depth,last_indexed_at')
     .or(filter)
-    .limit(20);
+    .limit(50);
   if (error) {
     console.warn('Lexical candidate lookup skipped:', error.message);
     return [];
@@ -591,6 +597,7 @@ function buildUserMessage(question: string, chunks: MatchDocument[]): string {
     month: 'long',
     day: 'numeric',
     year: 'numeric',
+    timeZone: 'America/Chicago',
   });
 
   return `Today's date is ${currentDate}.
@@ -944,14 +951,15 @@ export async function POST(request: Request) {
 
     if (!fallbackTriggered) {
       const completeAnswer = async (answer: string, degraded = false) => {
+        const effectiveDegraded = degraded || isGeneratedFallback(answer);
         const tasks: Promise<unknown>[] = [
-          logQuery(answer, degraded),
+          logQuery(answer, effectiveDegraded),
           publishDeduplicatedAnswer(deduplicationLease, answer),
         ];
-        if (!degraded && suggestedAnswerCacheKey) {
+        if (!effectiveDegraded && suggestedAnswerCacheKey) {
           tasks.push(setCachedAnswer(suggestedAnswerCacheKey, answer));
         }
-        if (!degraded && semanticCacheEligible && corpusVersion) {
+        if (!effectiveDegraded && semanticCacheEligible && corpusVersion) {
           tasks.push(storeSemanticCachedAnswer({
             question,
             embedding: questionEmbedding,

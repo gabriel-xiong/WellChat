@@ -27,6 +27,30 @@ test('selects subject terms while removing generic request language', () => {
   assert.deepEqual(selectLexicalSearchTerms('What information do you have about the retreat?'), ['retreat']);
 });
 
+test('expands relative event dates without treating broad phrasing as search terms', () => {
+  const november = new Date('2026-11-01T18:00:00Z');
+  assert.deepEqual(
+    selectLexicalSearchTerms('What events are happening this month?', 4, november),
+    ['events', 'november', 'nov']
+  );
+  assert.deepEqual(
+    selectLexicalSearchTerms('What is happening this month?', 4, november),
+    ['events', 'november', 'nov']
+  );
+  assert.deepEqual(
+    selectLexicalSearchTerms('What events are happening in November?', 4, november),
+    ['events', 'november', 'nov']
+  );
+});
+
+test('uses the church timezone when resolving this month', () => {
+  const stillOctoberInAustin = new Date('2026-11-01T03:30:00Z');
+  assert.deepEqual(
+    selectLexicalSearchTerms('events this month', 4, stillOctoberInAustin),
+    ['events', 'october', 'oct']
+  );
+});
+
 test('lexical candidates survive vector candidate exclusion and rerank first', () => {
   const generic = chunk({ id: 'generic', similarity: 0.43 });
   const lament = chunk({

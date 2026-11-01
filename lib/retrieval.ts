@@ -42,15 +42,36 @@ const GENERIC_SEARCH_WORDS = new Set([
   'have',
   'info',
   'information',
+  'happening',
   'looking',
+  'month',
   'resource',
   'resources',
   'sermon',
   'sermons',
   'tell',
+  'this',
+  'week',
   'well',
   'austin',
 ]);
+
+const MONTHS = [
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+] as const;
+
+const EVENT_INTENT_PATTERN = /\b(events?|happening|calendar|upcoming)\b|\b(?:this|next)\s+(?:month|week)\b/i;
 
 function tokenize(text: string): string[] {
   return text
@@ -61,8 +82,34 @@ function tokenize(text: string): string[] {
     .filter((token) => token.length > 2 && !STOP_WORDS.includes(token));
 }
 
-export function selectLexicalSearchTerms(question: string, limit = 3): string[] {
-  return [...new Set(tokenize(question).filter((token) => !GENERIC_SEARCH_WORDS.has(token)))].slice(0, limit);
+function monthTerms(question: string, referenceDate: Date): string[] {
+  const normalized = question.toLowerCase();
+  let monthIndex = MONTHS.findIndex((month) => new RegExp(`\\b${month}\\b`).test(normalized));
+
+  if (monthIndex < 0 && /\bthis\s+month\b/i.test(question)) {
+    const monthName = new Intl.DateTimeFormat('en-US', {
+      month: 'long',
+      timeZone: 'America/Chicago',
+    }).format(referenceDate).toLowerCase();
+    monthIndex = MONTHS.indexOf(monthName as typeof MONTHS[number]);
+  } else if (monthIndex < 0 && /\bnext\s+month\b/i.test(question)) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      month: 'numeric',
+      timeZone: 'America/Chicago',
+    }).formatToParts(referenceDate);
+    const month = Number(parts.find((part) => part.type === 'month')?.value ?? 1);
+    monthIndex = month % 12;
+  }
+
+  if (monthIndex < 0) return [];
+  const month = MONTHS[monthIndex];
+  return [month, month.slice(0, 3)];
+}
+
+export function selectLexicalSearchTerms(question: string, limit = 4, referenceDate = new Date()): string[] {
+  const intentTerms = EVENT_INTENT_PATTERN.test(question) ? ['events'] : [];
+  const subjectTerms = tokenize(question).filter((token) => !GENERIC_SEARCH_WORDS.has(token));
+  return [...new Set([...intentTerms, ...subjectTerms, ...monthTerms(question, referenceDate)])].slice(0, limit);
 }
 
 export function mergeRetrievalCandidates(
@@ -79,7 +126,7 @@ export function mergeRetrievalCandidates(
 }
 
 function lexicalBoost(question: string, chunk: MatchDocument): number {
-  const questionTokens = tokenize(question);
+  const questionTokens = [...new Set([...tokenize(question), ...selectLexicalSearchTerms(question, 8)])];
   const urlTokens = tokenize(chunk.url);
   const titleTokens = tokenize(chunk.title || '');
   const sectionTokens = tokenize(chunk.section || '');
