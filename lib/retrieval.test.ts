@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
+import { calculateLexicalScore, fuseRetrievalCandidates, getDomainCorrections, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
 import { isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from './retrieval-resources';
 
 function chunk(id: string, overrides: Partial<MatchDocument> = {}): MatchDocument {
@@ -14,6 +14,8 @@ test('extracts subject terms and expands real typo/synonym failures', () => {
   assert.ok(selectLexicalSearchTerms('When is the reheat?').includes('retreat'));
   assert.ok(selectLexicalSearchTerms('Are there careers here?').includes('jobs'));
   assert.equal(normalizeRetrievalQuery('When is the reheat?'), 'retreat');
+  assert.deepEqual(getDomainCorrections('When is the reheat?'), [{ from: 'reheat', to: 'retreat' }]);
+  assert.deepEqual(getDomainCorrections('What is our mission?'), []);
 });
 
 test('expands relative event dates in the church timezone', () => {

@@ -3,6 +3,7 @@ import { after } from 'next/server';
 import {
   calculateLexicalScore,
   fuseRetrievalCandidates,
+  getDomainCorrections,
   MatchDocument,
   normalizeRetrievalQuery,
   RetrievalDiagnostic,
@@ -652,6 +653,7 @@ function extractMarkdownSources(answer: string): Source[] {
 
 function buildUserMessage(question: string, chunks: MatchDocument[]): string {
   const context = buildContext(chunks);
+  const corrections = getDomainCorrections(question);
   const currentDate = new Date().toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
@@ -664,6 +666,7 @@ function buildUserMessage(question: string, chunks: MatchDocument[]): string {
 Question:
 ${question}
 
+${corrections.length ? `Validated domain spelling interpretation: ${corrections.map((correction) => `"${correction.from}" means "${correction.to}"`).join(', ')}. Answer the interpreted question directly; do not treat the typo literally.\n` : ''}
 Retrieved context:
 ${context}
 

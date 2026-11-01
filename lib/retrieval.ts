@@ -123,6 +123,12 @@ function correctDomainToken(token: string): string {
   return best;
 }
 
+export function getDomainCorrections(question: string): Array<{ from: string; to: string }> {
+  return rawTokens(question)
+    .map((token) => ({ from: token, to: correctDomainToken(token) }))
+    .filter((correction) => correction.from !== correction.to);
+}
+
 function monthTerms(question: string, referenceDate: Date): string[] {
   const normalized = question.toLowerCase();
   let monthIndex = MONTHS.findIndex((month) => new RegExp(`\\b${month}\\b`).test(normalized));
