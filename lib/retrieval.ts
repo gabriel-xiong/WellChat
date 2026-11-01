@@ -1,3 +1,5 @@
+export type RetrievalOrigin = 'vector' | 'lexical' | 'authoritative';
+
 export interface MatchDocument {
   id: string;
   url: string;
@@ -9,84 +11,121 @@ export interface MatchDocument {
   last_indexed_at: string | null;
   similarity: number;
   lexicalMatch?: boolean;
+  lexicalScore?: number;
+  vectorRank?: number;
+  lexicalRank?: number;
+  authoritativeRank?: number;
+  finalScore?: number;
+  retrievalConfidence?: number;
+  retrievalOrigins?: RetrievalOrigin[];
 }
 
-const STOP_WORDS = [
-  'about',
-  'after',
-  'and',
-  'are',
-  'can',
-  'does',
-  'for',
-  'from',
-  'how',
-  'is',
-  'me',
-  'of',
-  'on',
-  'the',
-  'to',
-  'us',
-  'what',
-  'when',
-  'where',
-  'with',
-  'you',
-];
+export interface RetrievalDiagnostic {
+  id: string;
+  url: string;
+  origins: RetrievalOrigin[];
+  vectorRank: number | null;
+  vectorSimilarity: number | null;
+  lexicalRank: number | null;
+  lexicalScore: number;
+  authoritativeRank: number | null;
+  reciprocalRankScore: number;
+  confidence: number;
+  selected: boolean;
+}
+
+export interface RetrievalResult {
+  chunks: MatchDocument[];
+  confidence: number;
+  diagnostics: RetrievalDiagnostic[];
+}
+
+const STOP_WORDS = new Set([
+  'about', 'after', 'and', 'are', 'can', 'does', 'for', 'from', 'how', 'is', 'me', 'of', 'on', 'the',
+  'to', 'us', 'what', 'when', 'where', 'with', 'you',
+]);
 
 const GENERIC_SEARCH_WORDS = new Set([
-  'any',
-  'available',
-  'church',
-  'find',
-  'have',
-  'info',
-  'information',
-  'happening',
-  'looking',
-  'month',
-  'resource',
-  'resources',
-  'sermon',
-  'sermons',
-  'tell',
-  'this',
-  'week',
-  'well',
-  'austin',
+  'any', 'available', 'church', 'find', 'have', 'info', 'information', 'happening', 'looking', 'month',
+  'resource', 'resources', 'sermon', 'sermons', 'tell', 'this', 'week', 'well', 'austin',
 ]);
 
 const MONTHS = [
-  'january',
-  'february',
-  'march',
-  'april',
-  'may',
-  'june',
-  'july',
-  'august',
-  'september',
-  'october',
-  'november',
-  'december',
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
 ] as const;
 
-const EVENT_INTENT_PATTERN = /\b(events?|happening|calendar|upcoming)\b|\b(?:this|next)\s+(?:month|week)\b/i;
+const DOMAIN_TERMS = [
+  'beliefs', 'community', 'events', 'giving', 'jobs', 'lament', 'ministries', 'missions', 'podcast',
+  'resources', 'retreat', 'sermons', 'serve', 'staff', 'sundays', 'worship',
+];
 
-function tokenize(text: string): string[] {
+const SYNONYMS: Record<string, string[]> = {
+  career: ['jobs'],
+  careers: ['jobs'],
+  donate: ['giving'],
+  donation: ['giving'],
+  donations: ['giving'],
+  employment: ['jobs'],
+  job: ['jobs'],
+  livestream: ['online', 'sundays'],
+  livestreaming: ['online', 'sundays'],
+  message: ['sermons'],
+  messages: ['sermons'],
+  smallgroup: ['community'],
+  sorrow: ['lament'],
+  testimony: ['stories'],
+  testimonies: ['stories'],
+  volunteer: ['serve'],
+  volunteering: ['serve'],
+};
+
+const EVENT_INTENT_PATTERN = /\b(events?|happening|calendar|upcoming)\b|\b(?:this|next)\s+(?:month|week)\b/i;
+const RRF_K = 60;
+
+function rawTokens(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/https?:\/\//g, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
-    .filter((token) => token.length > 2 && !STOP_WORDS.includes(token));
+    .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
+}
+
+function editDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length];
+}
+
+function correctDomainToken(token: string): string {
+  if (DOMAIN_TERMS.includes(token)) return token;
+  let best = token;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of DOMAIN_TERMS) {
+    const distance = editDistance(token, candidate);
+    const allowed = token.length >= 6 ? 2 : 1;
+    if (distance <= allowed && distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 function monthTerms(question: string, referenceDate: Date): string[] {
   const normalized = question.toLowerCase();
   let monthIndex = MONTHS.findIndex((month) => new RegExp(`\\b${month}\\b`).test(normalized));
-
   if (monthIndex < 0 && /\bthis\s+month\b/i.test(question)) {
     const monthName = new Intl.DateTimeFormat('en-US', {
       month: 'long',
@@ -101,16 +140,156 @@ function monthTerms(question: string, referenceDate: Date): string[] {
     const month = Number(parts.find((part) => part.type === 'month')?.value ?? 1);
     monthIndex = month % 12;
   }
-
   if (monthIndex < 0) return [];
   const month = MONTHS[monthIndex];
   return [month, month.slice(0, 3)];
 }
 
-export function selectLexicalSearchTerms(question: string, limit = 4, referenceDate = new Date()): string[] {
+export function normalizeRetrievalQuery(question: string): string {
+  const focusedTerms = selectLexicalSearchTerms(question);
+  return (focusedTerms.length ? focusedTerms : rawTokens(question).map(correctDomainToken)).join(' OR ');
+}
+
+export function selectLexicalSearchTerms(question: string, limit = 8, referenceDate = new Date()): string[] {
+  const corrected = rawTokens(question).map(correctDomainToken);
   const intentTerms = EVENT_INTENT_PATTERN.test(question) ? ['events'] : [];
-  const subjectTerms = tokenize(question).filter((token) => !GENERIC_SEARCH_WORDS.has(token));
-  return [...new Set([...intentTerms, ...subjectTerms, ...monthTerms(question, referenceDate)])].slice(0, limit);
+  const subjectTerms = corrected.filter((token) => !GENERIC_SEARCH_WORDS.has(token));
+  const synonymTerms = subjectTerms.flatMap((token) => SYNONYMS[token] ?? []);
+  return [...new Set([...intentTerms, ...subjectTerms, ...synonymTerms, ...monthTerms(question, referenceDate)])]
+    .slice(0, limit);
+}
+
+function fieldContains(field: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}${term.length > 3 ? 's?' : ''}\\b`, 'i').test(field);
+}
+
+export function calculateLexicalScore(question: string, chunk: MatchDocument): number {
+  const terms = selectLexicalSearchTerms(question);
+  if (!terms.length) return 0;
+  const path = new URL(chunk.url).pathname.replace(/[-_/]+/g, ' ');
+  const fields = [
+    { value: chunk.title || '', weight: 0.9 },
+    { value: path, weight: 0.85 },
+    { value: chunk.section || '', weight: 0.7 },
+    { value: chunk.content.slice(0, 2_000), weight: 0.35 },
+  ];
+  const matched = terms.reduce((total, term) => {
+    const best = Math.max(0, ...fields.filter((field) => fieldContains(field.value, term)).map((field) => field.weight));
+    return total + best;
+  }, 0);
+  const coverage = matched / terms.length;
+  const meaningfulPhrase = terms.filter((term) => term.length > 3).join(' ');
+  const titleOrPath = `${chunk.title || ''} ${path}`.toLowerCase();
+  const phraseBonus = meaningfulPhrase.length > 3 && titleOrPath.includes(meaningfulPhrase) ? 0.1 : 0;
+  const firstPathSegment = new URL(chunk.url).pathname.split('/').filter(Boolean)[0]?.replace(/s$/, '') ?? '';
+  const collectionBonus = terms.some((term) => firstPathSegment === term.replace(/s$/, '')) ? 0.15 : 0;
+  return Math.min(1, coverage + phraseBonus + collectionBonus);
+}
+
+function uniqueById(candidates: MatchDocument[]): MatchDocument[] {
+  return [...new Map(candidates.map((candidate) => [candidate.id, candidate])).values()];
+}
+
+function normalizedVectorConfidence(similarity: number | null): number {
+  if (similarity === null) return 0;
+  return Math.max(0, Math.min(1, (similarity - 0.25) / 0.3));
+}
+
+function candidateConfidence(candidate: MatchDocument, origins: RetrievalOrigin[]): number {
+  const vector = normalizedVectorConfidence(origins.includes('vector') ? candidate.similarity : null);
+  const lexical = origins.includes('lexical') ? candidate.lexicalScore ?? 0 : 0;
+  const authoritative = origins.includes('authoritative') ? 0.9 : 0;
+  const corroboration = origins.length >= 2 ? 0.08 : 0;
+  return Math.min(1, Math.max(vector, lexical, authoritative) + corroboration);
+}
+
+export function fuseRetrievalCandidates(
+  question: string,
+  vectorCandidates: MatchDocument[],
+  lexicalCandidates: MatchDocument[],
+  authoritativeCandidates: MatchDocument[] = [],
+  limit = 5,
+  maxChunksPerUrl = 2
+): RetrievalResult {
+  const vector = uniqueById(vectorCandidates).map((candidate, index) => ({ ...candidate, vectorRank: index + 1 }));
+  const lexical = uniqueById(lexicalCandidates)
+    .map((candidate) => ({
+      ...candidate,
+      lexicalMatch: true,
+      lexicalScore: candidate.lexicalScore ?? calculateLexicalScore(question, candidate),
+    }))
+    .filter((candidate) => (candidate.lexicalScore ?? 0) > 0)
+    .sort((left, right) => (right.lexicalScore ?? 0) - (left.lexicalScore ?? 0))
+    .map((candidate, index) => ({ ...candidate, lexicalRank: index + 1 }));
+  const authoritative = uniqueById(authoritativeCandidates)
+    .map((candidate) => ({
+      ...candidate,
+      lexicalScore: candidate.lexicalScore ?? calculateLexicalScore(question, candidate),
+    }))
+    .sort((left, right) => (right.lexicalScore ?? 0) - (left.lexicalScore ?? 0))
+    .map((candidate, index) => ({ ...candidate, authoritativeRank: index + 1 }));
+
+  const merged = new Map<string, MatchDocument>();
+  const add = (candidate: MatchDocument, origin: RetrievalOrigin, rank: number, weight: number) => {
+    const existing = merged.get(candidate.id) ?? { ...candidate, finalScore: 0, retrievalOrigins: [] };
+    const origins = new Set(existing.retrievalOrigins ?? []);
+    origins.add(origin);
+    existing.retrievalOrigins = [...origins];
+    existing.finalScore = (existing.finalScore ?? 0) + weight / (RRF_K + rank);
+    if (origin === 'vector') {
+      existing.vectorRank = rank;
+      existing.similarity = candidate.similarity;
+    }
+    if (origin === 'lexical') {
+      existing.lexicalRank = rank;
+      existing.lexicalScore = candidate.lexicalScore;
+      existing.lexicalMatch = true;
+    }
+    if (origin === 'authoritative') existing.authoritativeRank = rank;
+    merged.set(candidate.id, existing);
+  };
+
+  vector.forEach((candidate, index) => add(candidate, 'vector', index + 1, 1));
+  lexical.forEach((candidate, index) => add(candidate, 'lexical', index + 1, 1.1));
+  authoritative.forEach((candidate, index) => add(candidate, 'authoritative', index + 1, 1.25));
+
+  const ranked = [...merged.values()]
+    .map((candidate) => ({
+      ...candidate,
+      retrievalConfidence: candidateConfidence(candidate, candidate.retrievalOrigins ?? []),
+    }))
+    .sort((left, right) => (right.finalScore ?? 0) - (left.finalScore ?? 0));
+
+  const selected: MatchDocument[] = [];
+  const perUrl = new Map<string, number>();
+  for (const candidate of ranked) {
+    if ((perUrl.get(candidate.url) ?? 0) >= maxChunksPerUrl) continue;
+    selected.push(candidate);
+    perUrl.set(candidate.url, (perUrl.get(candidate.url) ?? 0) + 1);
+    if (selected.length === limit) break;
+  }
+
+  const selectedIds = new Set(selected.map((candidate) => candidate.id));
+  const diagnostics = ranked.map((candidate): RetrievalDiagnostic => ({
+    id: candidate.id,
+    url: candidate.url,
+    origins: candidate.retrievalOrigins ?? [],
+    vectorRank: candidate.vectorRank ?? null,
+    vectorSimilarity: candidate.retrievalOrigins?.includes('vector') ? candidate.similarity : null,
+    lexicalRank: candidate.lexicalRank ?? null,
+    lexicalScore: candidate.lexicalScore ?? 0,
+    authoritativeRank: candidate.authoritativeRank ?? null,
+    reciprocalRankScore: candidate.finalScore ?? 0,
+    confidence: candidate.retrievalConfidence ?? 0,
+    selected: selectedIds.has(candidate.id),
+  }));
+
+  return {
+    chunks: selected,
+    confidence: selected[0]?.retrievalConfidence ?? 0,
+    diagnostics,
+  };
 }
 
 export function mergeRetrievalCandidates(
@@ -120,63 +299,14 @@ export function mergeRetrievalCandidates(
   const merged = new Map(vectorCandidates.map((candidate) => [candidate.id, { ...candidate }]));
   for (const candidate of lexicalCandidates) {
     const existing = merged.get(candidate.id);
-    if (existing) existing.lexicalMatch = true;
+    if (existing) Object.assign(existing, candidate, { similarity: existing.similarity, lexicalMatch: true });
     else merged.set(candidate.id, { ...candidate, lexicalMatch: true });
   }
   return [...merged.values()];
 }
 
-function lexicalBoost(question: string, chunk: MatchDocument): number {
-  const questionTokens = [...new Set([...tokenize(question), ...selectLexicalSearchTerms(question, 8)])];
-  const urlTokens = tokenize(chunk.url);
-  const titleTokens = tokenize(chunk.title || '');
-  const sectionTokens = tokenize(chunk.section || '');
-  const contentTokens = tokenize(chunk.content.slice(0, 500));
-  const urlTitleSectionTokens = new Set([...urlTokens, ...titleTokens, ...sectionTokens]);
-  const contentTokenSet = new Set(contentTokens);
-
-  return questionTokens.reduce((score, token) => {
-    if (urlTitleSectionTokens.has(token)) return score + 0.08;
-    if (contentTokenSet.has(token)) return score + 0.04;
-    return score;
-  }, 0);
-}
-
-function directCollectionBoost(question: string, chunk: MatchDocument): number {
-  const subjectTerms = new Set(selectLexicalSearchTerms(question).map((token) => token.replace(/s$/, '')));
-  try {
-    const pathSegments = new URL(chunk.url).pathname.split('/').filter(Boolean);
-    const collection = pathSegments[0]?.replace(/s$/, '');
-    const matchesCollection = collection && subjectTerms.has(collection);
-    const matchesEventType = EVENT_INTENT_PATTERN.test(question)
-      && (chunk.content_type === 'event' || chunk.content_type === 'retreat');
-    const collectionIndex = EVENT_INTENT_PATTERN.test(question)
-      && pathSegments.length === 1
-      && collection === 'event';
-    return (matchesCollection || matchesEventType ? 0.3 : 0) + (collectionIndex ? 0.2 : 0);
-  } catch {
-    return 0;
-  }
-}
-
-function temporalEvidenceBoost(question: string, chunk: MatchDocument): number {
-  const evidence = `${chunk.section || ''} ${chunk.content.slice(0, 800)}`.toLowerCase();
-  const requestedMonth = monthTerms(question, new Date());
-  const hasRequestedMonth = requestedMonth.some((term) => new RegExp(`\\b${term}\\b`).test(evidence));
-  const asksForTime = /\b(?:when|time|times|date|schedule|month|week|today|tomorrow)\b/i.test(question);
-  const hasClockTime = /\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i.test(evidence);
-  return (hasRequestedMonth ? 0.2 : 0) + (asksForTime && hasClockTime ? 0.12 : 0);
-}
-
 export function rerankChunks(question: string, chunks: MatchDocument[], limit = 5): MatchDocument[] {
-  return [...chunks]
-    .sort((left, right) => {
-      const leftScore = left.similarity + lexicalBoost(question, left) + directCollectionBoost(question, left)
-        + temporalEvidenceBoost(question, left);
-      const rightScore = right.similarity + lexicalBoost(question, right) + directCollectionBoost(question, right)
-        + temporalEvidenceBoost(question, right);
-      return (rightScore + (right.lexicalMatch ? 0.25 : 0))
-        - (leftScore + (left.lexicalMatch ? 0.25 : 0));
-    })
-    .slice(0, limit);
+  const vector = [...chunks].sort((left, right) => right.similarity - left.similarity);
+  const lexical = chunks.filter((candidate) => candidate.lexicalMatch || calculateLexicalScore(question, candidate) > 0);
+  return fuseRetrievalCandidates(question, vector, lexical, [], limit).chunks;
 }

@@ -9,6 +9,7 @@ export const CHAT_CATEGORIES = [
   "giving",
   "ministries",
   "staff",
+  "jobs",
   "other",
 ] as const;
 
@@ -25,9 +26,18 @@ const CATEGORY_KEYWORDS: Array<[ChatCategory, string[]]> = [
   ["giving", ["give", "giving", "donate", "donation"]],
   ["ministries", ["ministry", "kids", "children", "students"]],
   ["staff", ["staff", "team", "pastor", "leader"]],
+  ["jobs", ["job", "jobs", "career", "careers", "employment"]],
 ];
 
 export function classifyQuestion(question: string): ChatCategory {
   const normalized = question.toLowerCase();
-  return CATEGORY_KEYWORDS.find(([, keywords]) => keywords.some((keyword) => normalized.includes(keyword)))?.[0] ?? "other";
+  const matches = CATEGORY_KEYWORDS.flatMap(([category, keywords], categoryIndex) => keywords
+    .filter((keyword) => normalized.includes(keyword))
+    .map((keyword) => ({ category, keyword, categoryIndex })));
+  if (!matches.length) return "other";
+  if (matches.some((match) => match.category === "crisis")) return "crisis";
+  if (matches.some((match) => match.category === "pastoral")) return "pastoral";
+  return matches.sort((left, right) => (
+    right.keyword.length - left.keyword.length || left.categoryIndex - right.categoryIndex
+  ))[0].category;
 }

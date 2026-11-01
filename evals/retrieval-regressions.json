@@ -1,0 +1,11 @@
+[
+  { "question": "any resources on lament?", "expectedSlugs": ["/sermons/lament"], "source": "dashboard-fallback" },
+  { "question": "Do you have sermons about lament?", "expectedSlugs": ["/sermons/lament"], "source": "dashboard-fallback" },
+  { "question": "Retreat", "expectedSlugs": ["/retreat"], "source": "dashboard-fallback" },
+  { "question": "What information do you have about the retreat?", "expectedSlugs": ["/retreat"], "source": "dashboard-fallback" },
+  { "question": "When is the reheat?", "expectedSlugs": ["/retreat"], "source": "dashboard-fallback-typo" },
+  { "question": "What events are happening this month?", "expectedSlugs": ["/events", "/retreat"], "source": "dashboard-fallback" },
+  { "question": "What time are Sunday services?", "expectedSlugs": ["/sundays"], "source": "production-smoke" },
+  { "question": "Are there any careers at The Well?", "expectedSlugs": ["/jobs"], "source": "coverage-audit" },
+  { "question": "How do I visit a community group?", "expectedSlugs": ["/community"], "source": "classification-overlap" }
+]

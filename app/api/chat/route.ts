@@ -1,9 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { after } from 'next/server';
 import {
+  calculateLexicalScore,
+  fuseRetrievalCandidates,
   MatchDocument,
-  mergeRetrievalCandidates,
-  rerankChunks,
+  normalizeRetrievalQuery,
+  RetrievalDiagnostic,
   selectLexicalSearchTerms,
 } from '@/lib/retrieval';
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
@@ -14,6 +16,7 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MIN_SIMILARITY_THRESHOLD = Number(process.env.MIN_SIMILARITY_THRESHOLD ?? '0.25');
+const MIN_RETRIEVAL_CONFIDENCE = Number(process.env.MIN_RETRIEVAL_CONFIDENCE ?? '0.45');
 const ESCALATION_CONTACT = process.env.ESCALATION_CONTACT || 'The Well directly';
 const MAX_QUESTION_LENGTH = 1000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
@@ -48,6 +51,8 @@ function createSupabaseClient() {
 }
 
 let supabaseClient: ReturnType<typeof createSupabaseClient> | null = null;
+let retrievalDiagnosticsSupported: boolean | null = null;
+let weightedLexicalSearchSupported: boolean | null = null;
 
 const SYSTEM_PROMPT = `You are a website assistant for The Well Austin Community Church.
 Your job is to help visitors find practical information from
@@ -146,6 +151,7 @@ const APPROVED_RESOURCE_LINKS = [
   { title: 'Podcast', url: 'https://thewellaustin.com/podcast', keywords: ['podcast'] },
   { title: 'Mission and Vision', url: 'https://thewellaustin.com/mission', keywords: ['mission', 'vision', 'values'] },
   { title: 'International Missions', url: 'https://thewellaustin.com/missions', keywords: ['international', 'missions', 'trip'] },
+  { title: 'Jobs', url: 'https://thewellaustin.com/jobs', keywords: ['job', 'jobs', 'career', 'careers', 'employment'] },
 ] as const;
 
 interface ChatRequestBody {
@@ -369,44 +375,103 @@ function getSupabaseClient() {
   return supabaseClient;
 }
 
-async function findLexicalCandidates(question: string): Promise<MatchDocument[]> {
+async function storeRetrievalDiagnostics(id: string, diagnostics: RetrievalDiagnostic[]): Promise<void> {
+  if (retrievalDiagnosticsSupported === false) return;
+  const { error } = await getSupabaseClient()
+    .from('query_logs')
+    .update({ retrieval_diagnostics: diagnostics })
+    .eq('id', id);
+  if (!error) {
+    retrievalDiagnosticsSupported = true;
+    return;
+  }
+  if (/retrieval_diagnostics|schema cache|column/i.test(error.message)) {
+    console.warn('Retrieval diagnostics storage is unavailable until the migration is applied.');
+    retrievalDiagnosticsSupported = false;
+    return;
+  }
+  console.warn('Failed to store retrieval diagnostics:', error.message);
+}
+
+interface LexicalCandidateSet {
+  lexical: MatchDocument[];
+  authoritative: MatchDocument[];
+}
+
+async function findLexicalCandidates(question: string): Promise<LexicalCandidateSet> {
   const terms = selectLexicalSearchTerms(question);
   const approvedUrls = APPROVED_RESOURCE_LINKS
     .filter((resource) => includesKeyword(question, [...resource.keywords]))
     .map((resource) => resource.url);
   const select = 'id,url,title,section,content,depth,content_type,last_indexed_at';
-  const requests = [];
+  const lexical = new Map<string, MatchDocument>();
+  const authoritative = new Map<string, MatchDocument>();
+  let usedWeightedSearch = false;
 
-  if (terms.length) {
-    const filter = terms.flatMap((term) => [
-      `title.ilike.%${term}%`,
-      `section.ilike.%${term}%`,
-      `url.ilike.%${term}%`,
-    ]).join(',');
-    requests.push(getSupabaseClient().from('documents').select(select).or(filter).limit(50));
+  if (terms.length && weightedLexicalSearchSupported !== false) {
+    const { data, error } = await getSupabaseClient().rpc('search_documents_lexical', {
+      search_query: normalizeRetrievalQuery(question),
+      limit_count: 60,
+    });
+    if (!error) {
+      weightedLexicalSearchSupported = true;
+      usedWeightedSearch = true;
+      for (const candidate of (data ?? []) as MatchDocument[]) {
+        lexical.set(candidate.id, {
+          ...candidate,
+          similarity: 0,
+          lexicalMatch: true,
+          lexicalScore: calculateLexicalScore(question, candidate),
+        });
+      }
+    } else if (/search_documents_lexical|schema cache/i.test(error.message)) {
+      weightedLexicalSearchSupported = false;
+    } else {
+      console.warn('Weighted lexical search skipped:', error.message);
+    }
+  }
+
+  if (terms.length && !usedWeightedSearch) {
+    const filterFor = (field: string) => terms.map((term) => `${field}.ilike.%${term}%`).join(',');
+    const fieldRequests = (['title', 'section', 'url', 'content'] as const).map(async (field) => {
+      const result = await getSupabaseClient().from('documents').select(select).or(filterFor(field)).limit(25);
+      if (result.error) console.warn(`Lexical ${field} lookup skipped:`, result.error.message);
+      return (result.data ?? []) as Omit<MatchDocument, 'similarity'>[];
+    });
+    const fieldResults = await Promise.all(fieldRequests);
+    for (const candidates of fieldResults) {
+      for (const candidate of candidates) {
+        if (!lexical.has(candidate.id)) {
+          const scored = { ...candidate, similarity: 0, lexicalMatch: true } as MatchDocument;
+          scored.lexicalScore = calculateLexicalScore(question, scored);
+          if (scored.lexicalScore > 0) lexical.set(candidate.id, scored);
+        }
+      }
+    }
   }
   if (approvedUrls.length) {
-    requests.push(getSupabaseClient().from('documents').select(select).in('url', approvedUrls));
-  }
-
-  if (!requests.length) return [];
-  const results = await Promise.all(requests);
-  const candidates = new Map<string, Omit<MatchDocument, 'similarity'>>();
-  for (const result of results) {
+    const result = await getSupabaseClient().from('documents').select(select).in('url', approvedUrls);
     if (result.error) {
-      console.warn('Lexical candidate lookup partially skipped:', result.error.message);
-      continue;
-    }
-    for (const candidate of (result.data ?? []) as Omit<MatchDocument, 'similarity'>[]) {
-      candidates.set(candidate.id, candidate);
+      console.warn('Authoritative resource lookup skipped:', result.error.message);
+    } else {
+      for (const candidate of (result.data ?? []) as Omit<MatchDocument, 'similarity'>[]) {
+        authoritative.set(candidate.id, { ...candidate, similarity: 0 });
+      }
     }
   }
+  const normalizedTerms = new Set(terms.map((term) => term.replace(/s$/, '')));
+  for (const candidate of lexical.values()) {
+    const segments = new URL(candidate.url).pathname.split('/').filter(Boolean);
+    const collection = segments[0]?.replace(/s$/, '');
+    const isCollectionPage = segments.length === 1
+      || (collection === 'retreat' && segments.length === 2 && /^\d{4}$/.test(segments[1]));
+    if (collection && normalizedTerms.has(collection) && isCollectionPage) authoritative.set(candidate.id, candidate);
+  }
 
-  return [...candidates.values()].map((candidate) => ({
-    ...candidate,
-    similarity: MIN_SIMILARITY_THRESHOLD,
-    lexicalMatch: true,
-  }));
+  return {
+    lexical: [...lexical.values()].sort((left, right) => (right.lexicalScore ?? 0) - (left.lexicalScore ?? 0)),
+    authoritative: [...authoritative.values()],
+  };
 }
 
 function isSemanticCacheEligible(question: string): boolean {
@@ -918,18 +983,20 @@ export async function POST(request: Request) {
       }
     }
 
-    let data: unknown;
+    let retrievalResult: ReturnType<typeof fuseRetrievalCandidates>;
     try {
       const retrieval = await supabase.rpc('match_documents', {
         query_embedding: questionEmbedding,
         similarity_threshold: MIN_SIMILARITY_THRESHOLD,
-        limit_count: 12,
+        limit_count: 30,
       });
       if (retrieval.error) throw new Error(`Supabase match_documents failed: ${retrieval.error.message}`);
       const lexicalCandidates = await findLexicalCandidates(question);
-      data = mergeRetrievalCandidates(
+      retrievalResult = fuseRetrievalCandidates(
+        question,
         (retrieval.data ?? []) as MatchDocument[],
-        lexicalCandidates
+        lexicalCandidates.lexical,
+        lexicalCandidates.authoritative
       );
     } catch (error) {
       console.error('Retrieval unavailable; returning approved resources:', error);
@@ -941,10 +1008,8 @@ export async function POST(request: Request) {
       return degradedResponse(question, queryId, 'retrieval_unavailable');
     }
 
-    const chunks = rerankChunks(question, (data ?? []) as MatchDocument[]);
-
-    const topSimilarity = chunks[0]?.similarity ?? 0;
-    const fallbackTriggered = chunks.length === 0 || topSimilarity < MIN_SIMILARITY_THRESHOLD;
+    const chunks = retrievalResult.chunks;
+    const fallbackTriggered = chunks.length === 0 || retrievalResult.confidence < MIN_RETRIEVAL_CONFIDENCE;
     const trace = traceFromChunks(chunks);
     const logQuery = async (answer: string, degraded = fallbackTriggered) => {
       const { error: logError } = await supabase.from('query_logs').insert({
@@ -962,6 +1027,8 @@ export async function POST(request: Request) {
 
       if (logError) {
         console.error('Failed to log chat query:', logError.message);
+      } else {
+        await storeRetrievalDiagnostics(queryId, retrievalResult.diagnostics);
       }
     };
 

@@ -1,155 +1,71 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  MatchDocument,
-  mergeRetrievalCandidates,
-  rerankChunks,
-  selectLexicalSearchTerms,
-} from './retrieval';
+import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
 
-function chunk(overrides: Partial<MatchDocument>): MatchDocument {
-  return {
-    id: crypto.randomUUID(),
-    url: 'https://thewellaustin.com/resources',
-    title: 'Resources',
-    section: 'Resources',
-    content: 'General resources from The Well.',
-    depth: 'deep',
-    last_indexed_at: null,
-    similarity: 0.4,
-    ...overrides,
-  };
+function chunk(id: string, overrides: Partial<MatchDocument> = {}): MatchDocument {
+  return { id, url: `https://thewellaustin.com/${id}`, title: id, section: 'Page', content: 'General information from The Well.', depth: 'deep', last_indexed_at: null, similarity: 0.4, ...overrides };
 }
 
-test('selects subject terms while removing generic request language', () => {
+test('extracts subject terms and expands real typo/synonym failures', () => {
   assert.deepEqual(selectLexicalSearchTerms('any resources on lament?'), ['lament']);
   assert.deepEqual(selectLexicalSearchTerms('Do you have sermons about lament?'), ['lament']);
   assert.deepEqual(selectLexicalSearchTerms('What information do you have about the retreat?'), ['retreat']);
+  assert.ok(selectLexicalSearchTerms('When is the reheat?').includes('retreat'));
+  assert.ok(selectLexicalSearchTerms('Are there careers here?').includes('jobs'));
+  assert.equal(normalizeRetrievalQuery('When is the reheat?'), 'retreat');
 });
 
-test('expands relative event dates without treating broad phrasing as search terms', () => {
+test('expands relative event dates in the church timezone', () => {
   const november = new Date('2026-11-01T18:00:00Z');
-  assert.deepEqual(
-    selectLexicalSearchTerms('What events are happening this month?', 4, november),
-    ['events', 'november', 'nov']
-  );
-  assert.deepEqual(
-    selectLexicalSearchTerms('What is happening this month?', 4, november),
-    ['events', 'november', 'nov']
-  );
-  assert.deepEqual(
-    selectLexicalSearchTerms('What events are happening in November?', 4, november),
-    ['events', 'november', 'nov']
-  );
-});
-
-test('uses the church timezone when resolving this month', () => {
+  assert.deepEqual(selectLexicalSearchTerms('What events are happening this month?', 8, november), ['events', 'november', 'nov']);
   const stillOctoberInAustin = new Date('2026-11-01T03:30:00Z');
-  assert.deepEqual(
-    selectLexicalSearchTerms('events this month', 4, stillOctoberInAustin),
-    ['events', 'october', 'oct']
-  );
+  assert.deepEqual(selectLexicalSearchTerms('events this month', 8, stillOctoberInAustin), ['events', 'october', 'oct']);
 });
 
-test('lexical candidates survive vector candidate exclusion and rerank first', () => {
-  const generic = chunk({ id: 'generic', similarity: 0.43 });
-  const lament = chunk({
-    id: 'lament',
-    url: 'https://thewellaustin.com/sermons/lament',
-    title: 'Lament - The Well Austin Community Church',
-    section: 'Psalm',
-    content: 'Lament teaches us how to suffer without losing hope.',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  const merged = mergeRetrievalCandidates([generic], [lament]);
-  assert.deepEqual(merged.map((candidate) => candidate.id), ['generic', 'lament']);
-  assert.equal(rerankChunks('any resources on lament?', merged, 1)[0].id, 'lament');
+test('weights title and URL evidence above incidental body matches', () => {
+  const title = chunk('title', { title: 'Lament', content: 'A teaching.' });
+  const body = chunk('body', { title: 'Resources', content: 'A paragraph that happens to mention lament.' });
+  assert.ok(calculateLexicalScore('lament', title) > calculateLexicalScore('lament', body));
 });
 
-test('merging marks duplicate vector candidates without discarding cosine similarity', () => {
-  const vector = chunk({ id: 'same', similarity: 0.61 });
-  const lexical = chunk({ id: 'same', similarity: 0.25, lexicalMatch: true });
-  const merged = mergeRetrievalCandidates([vector], [lexical]);
-  assert.equal(merged.length, 1);
-  assert.equal(merged[0].similarity, 0.61);
-  assert.equal(merged[0].lexicalMatch, true);
+test('RRF rewards candidates corroborated by vector and lexical retrieval', () => {
+  const corroborated = chunk('lament', { title: 'Lament', similarity: 0.48 });
+  const vectorOnly = chunk('generic', { similarity: 0.51 });
+  const result = fuseRetrievalCandidates('lament', [vectorOnly, corroborated], [corroborated]);
+  assert.equal(result.chunks[0].id, 'lament');
+  assert.deepEqual(result.chunks[0].retrievalOrigins?.sort(), ['lexical', 'vector']);
 });
 
-test('direct collection pages outrank secondary stories for a one-word subject', () => {
-  const story = chunk({
-    id: 'story',
-    url: 'https://thewellaustin.com/stories/finding-belonging-at-the-college-retreat',
-    title: 'Finding Belonging at the College Retreat',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  const currentRetreat = chunk({
-    id: 'current-retreat',
-    url: 'https://thewellaustin.com/retreats/2026',
-    title: "2026 Women's and Men's Retreats",
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  assert.equal(rerankChunks('Retreat', [story, currentRetreat], 1)[0].id, 'current-retreat');
+test('authoritative resources outrank secondary pages for direct intents', () => {
+  const story = chunk('story', { url: 'https://thewellaustin.com/stories/finding-belonging-at-the-college-retreat', title: 'Finding Belonging at the College Retreat', similarity: 0.5 });
+  const retreat = chunk('retreat', { url: 'https://thewellaustin.com/retreats/2026', title: "2026 Women's and Men's Retreats", similarity: 0 });
+  const result = fuseRetrievalCandidates('Retreat', [story], [story, retreat], [retreat]);
+  assert.equal(result.chunks[0].id, 'retreat');
 });
 
-test('time-bearing Sunday chunk outranks same-page parking chunks for service-time questions', () => {
-  const parking = chunk({
-    id: 'parking',
-    url: 'https://thewellaustin.com/sundays',
-    title: 'Sundays With Us',
-    section: 'Parking',
-    content: 'Sunday gathering times, service times, location, and visitor information.',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  const gathering = chunk({
-    id: 'gathering',
-    url: 'https://thewellaustin.com/sundays',
-    title: 'Sundays With Us',
-    section: 'Sundays With Us',
-    content: 'Currently meeting at Eastside Early College High School. Gatherings at 9:00am and 11:00am.',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  assert.equal(rerankChunks('What time are Sunday services?', [parking, gathering], 1)[0].id, 'gathering');
+test('caps repeated chunks from one URL so one page cannot crowd out sources', () => {
+  const repeated = Array.from({ length: 5 }, (_, index) => chunk(`same-${index}`, { url: 'https://thewellaustin.com/sundays', similarity: 0.6 - index * 0.01 }));
+  const alternatives = [chunk('events', { similarity: 0.5 }), chunk('community', { similarity: 0.49 })];
+  const result = fuseRetrievalCandidates('church information', [...repeated, ...alternatives], [], [], 5, 2);
+  assert.equal(result.chunks.filter((candidate) => candidate.url.endsWith('/sundays')).length, 2);
+  assert.ok(result.chunks.some((candidate) => candidate.id === 'events'));
 });
 
-test('event index and requested-month events outrank adjacent-month event pages', () => {
-  const index = chunk({
-    id: 'events-index',
-    url: 'https://thewellaustin.com/events',
-    title: 'Events',
-    section: 'Events',
-    content: 'Nov. 6–15 Retreats. Nov. 20 Students November Hang. Dec. 13 Winter Worship Night.',
-    content_type: 'event',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  const novemberRetreat = chunk({
-    id: 'november-retreat',
-    url: 'https://thewellaustin.com/retreats/2026',
-    title: "2026 Women's and Men's Retreats",
-    section: 'Nov. 6–15',
-    content: "Women's Retreat Nov. 6–8. Men's Retreat Nov. 13–15.",
-    content_type: 'retreat',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  const december = chunk({
-    id: 'december-event',
-    url: 'https://thewellaustin.com/events/winter-worship-night',
-    title: 'Winter Worship Night',
-    section: 'Events Home',
-    content: 'Winter Worship Night Dec. 13 at 7:00pm.',
-    content_type: 'event',
-    similarity: 0.25,
-    lexicalMatch: true,
-  });
-  assert.deepEqual(
-    rerankChunks('What events are happening in November?', [december, novemberRetreat, index], 3)
-      .map((candidate) => candidate.id),
-    ['events-index', 'november-retreat', 'december-event']
-  );
+test('weak lexical-only body evidence does not manufacture retrieval confidence', () => {
+  const weak = chunk('weak', { title: 'Resources', content: 'This page briefly mentions lament.', similarity: 0 });
+  const result = fuseRetrievalCandidates('lament', [], [weak]);
+  assert.ok(result.confidence < 0.45);
+  assert.equal(result.diagnostics[0].vectorSimilarity, null);
+  assert.equal(result.diagnostics[0].origins[0], 'lexical');
+});
+
+test('diagnostics explain rank inputs and final selection', () => {
+  const candidate = chunk('events', { title: 'Events', similarity: 0.52 });
+  const result = fuseRetrievalCandidates('What events are happening?', [candidate], [candidate], [candidate]);
+  assert.equal(result.diagnostics[0].selected, true);
+  assert.equal(result.diagnostics[0].vectorRank, 1);
+  assert.equal(result.diagnostics[0].lexicalRank, 1);
+  assert.equal(result.diagnostics[0].authoritativeRank, 1);
+  assert.ok(result.diagnostics[0].reciprocalRankScore > 0);
+  assert.ok(result.diagnostics[0].confidence >= 0.9);
 });

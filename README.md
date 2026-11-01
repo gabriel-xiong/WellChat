@@ -64,9 +64,9 @@ A visitor may ask semantically ("How can I get connected?") or use an exact site
 1. embeds the query with `text-embedding-3-small`;
 2. retrieves a vector candidate set from pgvector;
 3. adds lexical candidates for distinctive query terms;
-4. merges the candidates and boosts matches in URL, title, section, and content;
-5. prioritizes a directly named collection page;
-6. sends only the highest-ranked chunks to the model.
+4. combines independent rankings with reciprocal-rank fusion;
+5. calibrates confidence from real vector, lexical, and authoritative evidence;
+6. limits repeated chunks from the same URL and sends only the highest-ranked context to the model.
 
 The reranker is intentionally small and deterministic. It is easy to inspect, unit test, and tune against a hand-labeled retrieval set.
 
@@ -93,7 +93,7 @@ WordPress loads a small script that mounts a CSP-restricted iframe. The host pag
 
 The protected `/admin` dashboard surfaces query volume, fallback and escalation rates, retrieval sources, cache activity, API errors, rate-limit events, and browser-measured time to first token and total response time.
 
-The repository also includes three evaluation paths:
+The repository also includes evaluation paths:
 
 | Command | Scope |
 |---|---|
@@ -104,6 +104,8 @@ The repository also includes three evaluation paths:
 
 Benchmark outputs are environment- and corpus-dependent, so this README does not present a headline number without a committed run artifact. The harnesses and per-question outputs are the reproducible source of truth.
 
+The scheduled retrieval workflow reruns dashboard-derived failures such as Lament, retreat, relative-month events, and typo variants every Monday. Query logs store per-candidate vector rank, lexical rank, origin, fusion score, confidence, and selection state when the retrieval hardening migration is installed.
+
 ## Request lifecycle
 
 For a normal visitor question:
@@ -112,7 +114,7 @@ For a normal visitor question:
 2. Classify safety-sensitive intent before retrieval.
 3. Check a corpus-versioned semantic cache.
 4. Embed the query and retrieve vector plus lexical candidates.
-5. Rerank candidates and enforce the minimum similarity threshold.
+5. Fuse rankings, enforce source diversity, and apply calibrated retrieval confidence.
 6. Stream a context-only answer with source links.
 7. Log the retrieval trace and final response.
 8. Attach browser latency asynchronously through a correlated query ID.
@@ -140,6 +142,7 @@ Apply the SQL files in order:
 1. `db/schema.sql`
 2. `db/dashboard-migration.sql`
 3. `db/scalability-migration.sql`
+4. `db/retrieval-hardening-migration.sql`
 
 Configure at least:
 
@@ -200,7 +203,7 @@ components/
   ChatWidget.tsx                streaming visitor experience
   AdminDashboard.tsx            operational analytics
 lib/
-  retrieval.ts                  candidate merge and deterministic reranking
+  retrieval.ts                  query normalization, confidence, RRF, and source diversity
 scripts/
   ingest.ts                     production incremental ingestion
   ingestion-core.ts             discovery, extraction, hashing, and chunking
@@ -208,6 +211,7 @@ scripts/
   benchmark-*.ts                retrieval, RAG, and latency evaluation
 db/
   schema.sql                    corpus, telemetry, and retrieval function
+  retrieval-hardening-migration.sql  weighted text search and rank diagnostics
 public/widget.js                host-site loader
 wordpress/                      plugin and installation package
 ```

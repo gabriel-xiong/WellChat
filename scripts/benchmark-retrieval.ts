@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import { MatchDocument, rerankChunks } from '../lib/retrieval';
+import { readFileSync } from 'node:fs';
+import { calculateLexicalScore, fuseRetrievalCandidates, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from '../lib/retrieval';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -23,7 +24,7 @@ interface RetrievalComparison {
   hybrid: MatchDocument[];
 }
 
-const EVAL_SET: EvalQuestion[] = [
+const BASE_EVAL_SET: EvalQuestion[] = [
   { question: 'What time are Sunday services?', expectedSlugs: ['/sundays'] },
   { question: 'Where is The Well Austin located?', expectedSlugs: ['/sundays'] },
   { question: 'What should I expect on Sunday?', expectedSlugs: ['/sundays'] },
@@ -50,6 +51,20 @@ const EVAL_SET: EvalQuestion[] = [
   { question: 'What is the ministry residency program?', expectedSlugs: ['/residency'] },
   { question: 'Where can I see impact reports?', expectedSlugs: ['/impact'] },
 ];
+
+const REGRESSION_SET = JSON.parse(
+  readFileSync(new URL('../evals/retrieval-regressions.json', import.meta.url), 'utf8')
+) as Array<EvalQuestion & { source: string }>;
+const EVAL_SET: EvalQuestion[] = [...BASE_EVAL_SET, ...REGRESSION_SET];
+
+const AUTHORITATIVE_RESOURCES = [
+  { url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'visit', 'location', 'parking'] },
+  { url: 'https://thewellaustin.com/community', keywords: ['community', 'group'] },
+  { url: 'https://thewellaustin.com/serve', keywords: ['serve', 'volunteer'] },
+  { url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate'] },
+  { url: 'https://thewellaustin.com/events', keywords: ['event', 'happening', 'calendar', 'this month'] },
+  { url: 'https://thewellaustin.com/jobs', keywords: ['job', 'jobs', 'career', 'careers', 'employment'] },
+] as const;
 
 function assertEnv(): void {
   if (!SUPABASE_URL) throw new Error('NEXT_PUBLIC_SUPABASE_URL is required.');
@@ -103,7 +118,7 @@ async function embedQuestion(question: string): Promise<number[]> {
   return embedding;
 }
 
-async function retrieveCandidates(question: string): Promise<MatchDocument[]> {
+async function retrieveCandidates(question: string): Promise<{ vector: MatchDocument[]; hybrid: MatchDocument[] }> {
   const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { persistSession: false },
   });
@@ -111,11 +126,59 @@ async function retrieveCandidates(question: string): Promise<MatchDocument[]> {
   const { data, error } = await supabase.rpc('match_documents', {
     query_embedding: questionEmbedding,
     similarity_threshold: MIN_SIMILARITY_THRESHOLD,
-    limit_count: 12,
+    limit_count: 30,
   });
 
   if (error) throw new Error(`Supabase match_documents failed: ${error.message}`);
-  return (data ?? []) as MatchDocument[];
+  const vector = (data ?? []) as MatchDocument[];
+  const select = 'id,url,title,section,content,depth,content_type,last_indexed_at';
+  const terms = selectLexicalSearchTerms(question);
+  const lexicalMap = new Map<string, MatchDocument>();
+  const lexicalRpc = await supabase.rpc('search_documents_lexical', {
+    search_query: normalizeRetrievalQuery(question),
+    limit_count: 60,
+  });
+  if (!lexicalRpc.error) {
+    for (const candidate of (lexicalRpc.data ?? []) as MatchDocument[]) {
+      lexicalMap.set(candidate.id, { ...candidate, similarity: 0, lexicalMatch: true, lexicalScore: calculateLexicalScore(question, candidate) });
+    }
+  }
+  if (terms.length && lexicalRpc.error) {
+    for (const field of ['title', 'section', 'url', 'content'] as const) {
+      const filters = terms.map((term) => `${field}.ilike.%${term}%`).join(',');
+      const result = await supabase.from('documents').select(select).or(filters).limit(25);
+      if (result.error) throw new Error(`Lexical ${field} lookup failed: ${result.error.message}`);
+      for (const raw of (result.data ?? []) as Omit<MatchDocument, 'similarity'>[]) {
+        const candidate = { ...raw, similarity: 0, lexicalMatch: true } as MatchDocument;
+        candidate.lexicalScore = calculateLexicalScore(question, candidate);
+        if (candidate.lexicalScore > 0) lexicalMap.set(candidate.id, candidate);
+      }
+    }
+  }
+  const normalized = question.toLowerCase();
+  const authoritativeUrls = AUTHORITATIVE_RESOURCES
+    .filter((resource) => resource.keywords.some((keyword) => normalized.includes(keyword)))
+    .map((resource) => resource.url);
+  const authoritativeResult = authoritativeUrls.length
+    ? await supabase.from('documents').select(select).in('url', authoritativeUrls)
+    : { data: [], error: null };
+  if (authoritativeResult.error) throw new Error(`Authoritative lookup failed: ${authoritativeResult.error.message}`);
+  const authoritative = ((authoritativeResult.data ?? []) as Omit<MatchDocument, 'similarity'>[])
+    .map((candidate) => ({ ...candidate, similarity: 0 }));
+  const normalizedTerms = new Set(terms.map((term) => term.replace(/s$/, '')));
+  for (const candidate of lexicalMap.values()) {
+    const segments = new URL(candidate.url).pathname.split('/').filter(Boolean);
+    const collection = segments[0]?.replace(/s$/, '');
+    const isCollectionPage = segments.length === 1
+      || (collection === 'retreat' && segments.length === 2 && /^\d{4}$/.test(segments[1]));
+    if (collection && normalizedTerms.has(collection) && isCollectionPage && !authoritative.some((entry) => entry.id === candidate.id)) {
+      authoritative.push(candidate);
+    }
+  }
+  return {
+    vector,
+    hybrid: fuseRetrievalCandidates(question, vector, [...lexicalMap.values()], authoritative).chunks,
+  };
 }
 
 async function runComparison(evalQuestion: EvalQuestion): Promise<RetrievalComparison> {
@@ -123,8 +186,8 @@ async function runComparison(evalQuestion: EvalQuestion): Promise<RetrievalCompa
   return {
     question: evalQuestion.question,
     expectedSlugs: evalQuestion.expectedSlugs,
-    baseline: candidates.slice(0, 5),
-    hybrid: rerankChunks(evalQuestion.question, candidates),
+    baseline: candidates.vector.slice(0, 5),
+    hybrid: candidates.hybrid,
   };
 }
 
@@ -204,6 +267,11 @@ async function main(): Promise<void> {
 
   printSummary(comparisons);
   printFailures(comparisons);
+  const regressionFailures = comparisons.slice(BASE_EVAL_SET.length)
+    .filter((comparison) => !hitAt(comparison.hybrid, comparison.expectedSlugs, 5));
+  if (regressionFailures.length) {
+    throw new Error(`${regressionFailures.length} dashboard-derived retrieval regression(s) failed.`);
+  }
   console.log('\nCaveat: This is a small hand-labeled eval set over the currently indexed Supabase documents. Results can change after re-ingestion, copy changes, chunking changes, or label revisions.');
 }
 
