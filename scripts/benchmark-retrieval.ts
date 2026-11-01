@@ -108,8 +108,9 @@ async function embedQuestion(question: string): Promise<number[]> {
   });
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`OpenAI embedding request failed: ${response.status} ${response.statusText} - ${body}`);
+    const payload = await response.json().catch(() => null) as { error?: { code?: string; type?: string } } | null;
+    const code = payload?.error?.code || payload?.error?.type || 'unknown_error';
+    throw new Error(`OpenAI embedding request failed: HTTP ${response.status} (${code}).`);
   }
 
   const payload = await response.json() as EmbeddingResponse;
@@ -276,6 +277,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(`[retrieval-benchmark] ${error instanceof Error ? error.stack || error.message : String(error)}`);
   process.exit(1);
 });
