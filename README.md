@@ -170,6 +170,24 @@ npm run ingest:discover
 npm run ingest:audit
 ```
 
+### Weekly monitoring email
+
+`.github/workflows/weekly-monitoring.yml` runs at 8:00 AM America/Chicago every Monday and emails a seven-day operational summary. It reports fallbacks, missing retrieval sources, latency, cache usage, rate limits, API errors, corpus freshness, ingestion status, categories, and repeated questions. Pastoral and crisis query text is redacted.
+
+Configure these GitHub Actions repository secrets:
+
+```env
+RESEND_API_KEY=
+MONITORING_EMAIL_TO=you@example.com
+MONITORING_EMAIL_FROM=WellChat Monitoring <monitoring@your-verified-domain.com>
+```
+
+The workflow skips cleanly until all three are configured. Preview the report without sending email:
+
+```bash
+npm run monitoring:weekly:dry-run
+```
+
 ## Repository map
 
 ```text
@@ -186,6 +204,7 @@ lib/
 scripts/
   ingest.ts                     production incremental ingestion
   ingestion-core.ts             discovery, extraction, hashing, and chunking
+  send-weekly-monitoring-report.ts  weekly operations email
   benchmark-*.ts                retrieval, RAG, and latency evaluation
 db/
   schema.sql                    corpus, telemetry, and retrieval function

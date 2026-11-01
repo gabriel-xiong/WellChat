@@ -1,0 +1,72 @@
+name: Weekly monitoring email
+
+on:
+  schedule:
+    # GitHub cron is UTC. Running at both possible offsets lets the gate below
+    # select 8:00 AM America/Chicago across daylight-saving changes.
+    - cron: "0 13,14 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: weekly-monitoring-email
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check Austin schedule
+        id: schedule
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$(TZ=America/Chicago date +%u-%H)" == "1-08" ]]; then
+            echo "run_report=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_report=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check email configuration
+        if: steps.schedule.outputs.run_report == 'true'
+        id: email
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MONITORING_EMAIL_TO: ${{ secrets.MONITORING_EMAIL_TO }}
+          MONITORING_EMAIL_FROM: ${{ secrets.MONITORING_EMAIL_FROM }}
+        shell: bash
+        run: |
+          if [[ -n "$RESEND_API_KEY" && -n "$MONITORING_EMAIL_TO" && -n "$MONITORING_EMAIL_FROM" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Weekly monitoring email skipped. Configure RESEND_API_KEY, MONITORING_EMAIL_TO, and MONITORING_EMAIL_FROM repository secrets."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+        run: npm ci
+
+      - name: Generate and send weekly report
+        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MONITORING_EMAIL_TO: ${{ secrets.MONITORING_EMAIL_TO }}
+          MONITORING_EMAIL_FROM: ${{ secrets.MONITORING_EMAIL_FROM }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx tsx scripts/send-weekly-monitoring-report.ts
