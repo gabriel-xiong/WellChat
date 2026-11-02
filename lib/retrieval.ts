@@ -81,6 +81,8 @@ const SYNONYMS: Record<string, string[]> = {
 };
 
 const EVENT_INTENT_PATTERN = /\b(events?|happening|calendar|upcoming)\b|\b(?:this|next)\s+(?:month|week)\b/i;
+const TEMPORAL_QUESTION_PATTERN = /\b(?:when|what\s+time|date|dates|schedule|this\s+month|this\s+week|next\s+month|next\s+week)\b/i;
+const DATE_OR_TIME_PATTERN = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s*\d{1,2}\b|\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i;
 const RRF_K = 60;
 
 function rawTokens(text: string): string[] {
@@ -193,6 +195,21 @@ export function calculateLexicalScore(question: string, chunk: MatchDocument): n
   return Math.min(1, coverage + phraseBonus + collectionBonus);
 }
 
+export function calculateTemporalEvidenceScore(question: string, chunk: MatchDocument): number {
+  if (!TEMPORAL_QUESTION_PATTERN.test(question)) return 0;
+  const evidence = `${chunk.section || ''} ${chunk.content}`;
+  let score = DATE_OR_TIME_PATTERN.test(evidence) ? 1 : 0;
+  const requestedMonths = monthTerms(question, new Date());
+  if (requestedMonths.some((term) => new RegExp(`\\b${term}\\b`, 'i').test(evidence))) score += 0.5;
+  return score;
+}
+
+function compareLexicalEvidence(question: string, left: MatchDocument, right: MatchDocument): number {
+  const lexicalDifference = (right.lexicalScore ?? 0) - (left.lexicalScore ?? 0);
+  if (lexicalDifference !== 0) return lexicalDifference;
+  return calculateTemporalEvidenceScore(question, right) - calculateTemporalEvidenceScore(question, left);
+}
+
 function uniqueById(candidates: MatchDocument[]): MatchDocument[] {
   return [...new Map(candidates.map((candidate) => [candidate.id, candidate])).values()];
 }
@@ -226,14 +243,14 @@ export function fuseRetrievalCandidates(
       lexicalScore: candidate.lexicalScore ?? calculateLexicalScore(question, candidate),
     }))
     .filter((candidate) => (candidate.lexicalScore ?? 0) > 0)
-    .sort((left, right) => (right.lexicalScore ?? 0) - (left.lexicalScore ?? 0))
+    .sort((left, right) => compareLexicalEvidence(question, left, right))
     .map((candidate, index) => ({ ...candidate, lexicalRank: index + 1 }));
   const authoritative = uniqueById(authoritativeCandidates)
     .map((candidate) => ({
       ...candidate,
       lexicalScore: candidate.lexicalScore ?? calculateLexicalScore(question, candidate),
     }))
-    .sort((left, right) => (right.lexicalScore ?? 0) - (left.lexicalScore ?? 0))
+    .sort((left, right) => compareLexicalEvidence(question, left, right))
     .map((candidate, index) => ({ ...candidate, authoritativeRank: index + 1 }));
 
   const merged = new Map<string, MatchDocument>();

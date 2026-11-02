@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateLexicalScore, fuseRetrievalCandidates, getDomainCorrections, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
+import { calculateLexicalScore, calculateTemporalEvidenceScore, fuseRetrievalCandidates, getDomainCorrections, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
 import { isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from './retrieval-resources';
 
 function chunk(id: string, overrides: Partial<MatchDocument> = {}): MatchDocument {
@@ -29,6 +29,14 @@ test('weights title and URL evidence above incidental body matches', () => {
   const title = chunk('title', { title: 'Lament', content: 'A teaching.' });
   const body = chunk('body', { title: 'Resources', content: 'A paragraph that happens to mention lament.' });
   assert.ok(calculateLexicalScore('lament', title) > calculateLexicalScore('lament', body));
+});
+
+test('date-bearing chunks win ties for time-sensitive questions', () => {
+  const generic = chunk('retreat-general', { title: 'Retreats', content: 'A hosted weekend at CYJ Retreats.' });
+  const dates = chunk('retreat-dates', { title: 'Retreats', content: "Women's Retreat Nov. 6 to Nov. 8. Men's Retreat Nov. 13 to Nov. 15." });
+  assert.equal(calculateLexicalScore('When is the retreat?', generic), calculateLexicalScore('When is the retreat?', dates));
+  assert.ok(calculateTemporalEvidenceScore('When is the retreat?', dates) > calculateTemporalEvidenceScore('When is the retreat?', generic));
+  assert.equal(fuseRetrievalCandidates('When is the retreat?', [], [generic, dates], [generic, dates]).chunks[0].id, 'retreat-dates');
 });
 
 test('RRF rewards candidates corroborated by vector and lexical retrieval', () => {
