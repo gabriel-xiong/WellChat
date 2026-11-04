@@ -128,7 +128,8 @@ function summarizeRepeatedQuestions(queries: MonitoringQuery[]): Array<[string, 
 export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringReport {
   const { queries, events } = input;
   const fallbacks = queries.filter((query) => query.fallback_triggered);
-  const sourceLess = queries.filter((query) => !query.cache_hit && !(query.retrieved_urls?.length));
+  const retrievalFallbacks = fallbacks.filter((query) => !query.cache_hit && !(query.retrieved_urls?.length));
+  const postRetrievalAbstentions = fallbacks.filter((query) => (query.retrieved_urls?.length ?? 0) > 0);
   const cacheHits = queries.filter((query) => query.cache_hit).length;
   const totalTimes = queries.flatMap((query) => query.total_response_time_ms === null ? [] : [query.total_response_time_ms]);
   const firstTokenTimes = queries.flatMap((query) => query.time_to_first_token_ms === null ? [] : [query.time_to_first_token_ms]);
@@ -143,7 +144,7 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
 
   const alerts: string[] = [];
   if (queries.length && fallbacks.length / queries.length >= 0.1) alerts.push(`Fallback rate is ${percentage(fallbacks.length, queries.length)}.`);
-  if (sourceLess.length) alerts.push(`${sourceLess.length} non-cached queries had no retrieved sources.`);
+  if (retrievalFallbacks.length) alerts.push(`${retrievalFallbacks.length} queries fell back because retrieval had no sources.`);
   if (apiErrors) alerts.push(`${apiErrors} API errors were recorded.`);
   if (input.ingestion?.conclusion && input.ingestion.conclusion !== 'success') alerts.push(`Latest ingestion concluded with ${input.ingestion.conclusion}.`);
   if ((input.ingestion?.failuresInWindow ?? 0) > 0) alerts.push(`${input.ingestion?.failuresInWindow} ingestion runs failed during the period.`);
@@ -154,7 +155,8 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
   const metrics = [
     ['Queries', String(queries.length)],
     ['Fallbacks', `${fallbacks.length} (${percentage(fallbacks.length, queries.length)})`],
-    ['No retrieved sources', String(sourceLess.length)],
+    ['Retrieval fallbacks (no sources)', String(retrievalFallbacks.length)],
+    ['Abstentions after retrieval', String(postRetrievalAbstentions.length)],
     ['Cache hits', `${cacheHits} (${percentage(cacheHits, queries.length)})`],
     ['Average first token', formatMilliseconds(average(firstTokenTimes))],
     ['P95 total response', formatMilliseconds(percentile(totalTimes, 0.95))],
@@ -166,7 +168,7 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
     ['Latest ingestion', input.ingestion ? `${input.ingestion.conclusion ?? 'unknown'} — ${formatDateTime(input.ingestion.createdAt)}` : 'Unavailable'],
   ] as const;
 
-  const fallbackLines = fallbacks.slice(0, 20).map((query) => {
+  const fallbackLines = (items: MonitoringQuery[]) => items.slice(0, 20).map((query) => {
     const sourceState = query.retrieved_urls?.length ? `${query.retrieved_urls.length} source(s)` : 'no sources';
     return `- ${displayedQuestion(query)} — ${sourceState} — ${formatDateTime(query.created_at)}`;
   });
@@ -178,8 +180,11 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
     'Metrics:',
     ...metrics.map(([label, value]) => `- ${label}: ${value}`),
     '',
-    'Fallback queries (sensitive text is redacted):',
-    ...(fallbackLines.length ? fallbackLines : ['- None']),
+    'Retrieval fallbacks — no sources found (sensitive text is redacted):',
+    ...(fallbackLines(retrievalFallbacks).length ? fallbackLines(retrievalFallbacks) : ['- None']),
+    '',
+    'Abstentions after retrieval — sources existed, but the answer was safely withheld:',
+    ...(fallbackLines(postRetrievalAbstentions).length ? fallbackLines(postRetrievalAbstentions) : ['- None']),
     '',
     'Top categories:',
     ...(categories.length ? categories.map(([category, count]) => `- ${category}: ${count}`) : ['- None']),
@@ -191,11 +196,11 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
   ].filter((line, index, all) => line || index < all.length - 1).join('\n');
 
   const metricRows = metrics.map(([label, value]) => `<tr><td style="padding:7px 12px;border-bottom:1px solid #e5e7eb">${escapeHtml(label)}</td><td style="padding:7px 12px;border-bottom:1px solid #e5e7eb;font-weight:600">${escapeHtml(value)}</td></tr>`).join('');
-  const fallbackItems = fallbacks.slice(0, 20).map((query) => `<li style="margin:8px 0"><strong>${escapeHtml(displayedQuestion(query))}</strong><br><span style="color:#52605d">${query.retrieved_urls?.length ?? 0} source(s) · ${escapeHtml(formatDateTime(query.created_at))}</span></li>`).join('') || '<li>None</li>';
+  const fallbackItems = (items: MonitoringQuery[]) => items.slice(0, 20).map((query) => `<li style="margin:8px 0"><strong>${escapeHtml(displayedQuestion(query))}</strong><br><span style="color:#52605d">${query.retrieved_urls?.length ?? 0} source(s) · ${escapeHtml(formatDateTime(query.created_at))}</span></li>`).join('') || '<li>None</li>';
   const alertHtml = alerts.length
     ? `<div style="background:#fff4e5;border:1px solid #f0c36d;border-radius:8px;padding:12px 16px"><strong>Needs attention</strong><ul>${alerts.map((alert) => `<li>${escapeHtml(alert)}</li>`).join('')}</ul></div>`
     : '<div style="background:#eaf8f4;border:1px solid #9bd8c8;border-radius:8px;padding:12px 16px"><strong>No alert thresholds were crossed.</strong></div>';
-  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#17332f;line-height:1.45"><div style="max-width:720px;margin:auto;padding:24px"><h1 style="font-size:24px;margin-bottom:4px">WellChat weekly monitoring</h1><p style="color:#52605d;margin-top:0">${escapeHtml(period)}</p>${alertHtml}<h2 style="font-size:18px;margin-top:24px">Metrics</h2><table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">${metricRows}</table><h2 style="font-size:18px;margin-top:24px">Fallback queries</h2><p style="color:#52605d">Sensitive pastoral and crisis query text is always redacted.</p><ol>${fallbackItems}</ol><h2 style="font-size:18px;margin-top:24px">Top categories</h2><ul>${categories.map(([category, count]) => `<li>${escapeHtml(category)}: ${count}</li>`).join('') || '<li>None</li>'}</ul><h2 style="font-size:18px;margin-top:24px">Most repeated questions</h2><ul>${repeated.map(([question, count]) => `<li>${escapeHtml(question)}: ${count}</li>`).join('') || '<li>None</li>'}</ul>${input.ingestion?.url ? `<p><a href="${escapeHtml(input.ingestion.url)}">View latest ingestion run</a></p>` : ''}</div></body></html>`;
+  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#17332f;line-height:1.45"><div style="max-width:720px;margin:auto;padding:24px"><h1 style="font-size:24px;margin-bottom:4px">WellChat weekly monitoring</h1><p style="color:#52605d;margin-top:0">${escapeHtml(period)}</p>${alertHtml}<h2 style="font-size:18px;margin-top:24px">Metrics</h2><table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">${metricRows}</table><h2 style="font-size:18px;margin-top:24px">Retrieval fallbacks</h2><p style="color:#52605d">No sources were found. Sensitive pastoral and crisis query text is always redacted.</p><ol>${fallbackItems(retrievalFallbacks)}</ol><h2 style="font-size:18px;margin-top:24px">Abstentions after retrieval</h2><p style="color:#52605d">Sources existed, but the answer was safely withheld rather than inferred.</p><ol>${fallbackItems(postRetrievalAbstentions)}</ol><h2 style="font-size:18px;margin-top:24px">Top categories</h2><ul>${categories.map(([category, count]) => `<li>${escapeHtml(category)}: ${count}</li>`).join('') || '<li>None</li>'}</ul><h2 style="font-size:18px;margin-top:24px">Most repeated questions</h2><ul>${repeated.map(([question, count]) => `<li>${escapeHtml(question)}: ${count}</li>`).join('') || '<li>None</li>'}</ul>${input.ingestion?.url ? `<p><a href="${escapeHtml(input.ingestion.url)}">View latest ingestion run</a></p>` : ''}</div></body></html>`;
 
   return { subject, text, html };
 }

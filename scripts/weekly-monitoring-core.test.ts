@@ -43,9 +43,21 @@ test('builds a useful weekly report with fallback and operational metrics', () =
   ]));
   assert.match(report.subject, /1 fallbacks \/ 2 queries/);
   assert.match(report.text, /Fallbacks: 1 \(50\.0%\)/);
-  assert.match(report.text, /No retrieved sources: 1/);
+  assert.match(report.text, /Retrieval fallbacks \(no sources\): 1/);
+  assert.match(report.text, /Abstentions after retrieval: 0/);
   assert.match(report.text, /Rate limited requests: 1/);
   assert.match(report.html, /Unknown event\?/);
+});
+
+test('separates retrieval failures from safe abstentions after retrieval', () => {
+  const report = buildWeeklyMonitoringReport(input([
+    query({ question: 'Unknown event?', fallback_triggered: true, retrieved_urls: [] }),
+    query({ question: 'Do you use intinction at communion?', fallback_triggered: true }),
+  ]));
+  assert.match(report.text, /Retrieval fallbacks \(no sources\): 1/);
+  assert.match(report.text, /Abstentions after retrieval: 1/);
+  assert.match(report.text, /Retrieval fallbacks — no sources found/);
+  assert.match(report.text, /Abstentions after retrieval — sources existed/);
 });
 
 test('redacts sensitive query text from both email formats', () => {

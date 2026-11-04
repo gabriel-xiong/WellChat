@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateLexicalScore, calculateTemporalEvidenceScore, fuseRetrievalCandidates, getDomainCorrections, MatchDocument, normalizeRetrievalQuery, selectLexicalSearchTerms } from './retrieval';
+import { calculateLexicalScore, calculateTemporalEvidenceScore, fuseRetrievalCandidates, getDomainCorrections, hasDirectTopicEvidence, MatchDocument, normalizeRetrievalQuery, requiresDirectTopicEvidence, selectLexicalSearchTerms } from './retrieval';
 import { isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from './retrieval-resources';
 
 function chunk(id: string, overrides: Partial<MatchDocument> = {}): MatchDocument {
@@ -15,6 +15,7 @@ test('extracts subject terms and expands real typo/synonym failures', () => {
   assert.ok(selectLexicalSearchTerms('Are there careers here?').includes('jobs'));
   assert.equal(normalizeRetrievalQuery('When is the reheat?'), 'retreat');
   assert.deepEqual(getDomainCorrections('When is the reheat?'), [{ from: 'reheat', to: 'retreat' }]);
+  assert.deepEqual(getDomainCorrections('communion'), []);
   assert.deepEqual(getDomainCorrections('What is our mission?'), []);
 });
 
@@ -75,6 +76,15 @@ test('weak lexical-only body evidence does not manufacture retrieval confidence'
   assert.ok(result.confidence < 0.45);
   assert.equal(result.diagnostics[0].vectorSimilarity, null);
   assert.equal(result.diagnostics[0].origins[0], 'lexical');
+});
+
+test('does not answer a specific unsupported topic from a semantic near-match', () => {
+  const community = chunk('community', { title: 'Community Groups', content: 'Find a group and connect with others.', similarity: 0.64 });
+  const communion = chunk('communion', { title: 'Communion', content: 'We celebrate communion regularly.', similarity: 0.4 });
+  assert.equal(requiresDirectTopicEvidence('communion'), true);
+  assert.equal(hasDirectTopicEvidence('communion', [community]), false);
+  assert.equal(fuseRetrievalCandidates('communion', [community], []).confidence, 0);
+  assert.ok(fuseRetrievalCandidates('communion', [communion], []).confidence >= 0.45);
 });
 
 test('diagnostics explain rank inputs and final selection', () => {

@@ -117,7 +117,9 @@ function correctDomainToken(token: string): string {
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const candidate of DOMAIN_TERMS) {
     const distance = editDistance(token, candidate);
-    const allowed = token.length >= 6 ? 2 : 1;
+    // Two edits are useful for short, clear typos like "reheat" → "retreat",
+    // but become unsafe for long words (for example, "communion" → "community").
+    const allowed = token.length >= 8 ? 1 : token.length >= 6 ? 2 : 1;
     if (distance <= allowed && distance < bestDistance) {
       best = candidate;
       bestDistance = distance;
@@ -194,6 +196,23 @@ export function calculateLexicalScore(question: string, chunk: MatchDocument): n
   const firstPathSegment = new URL(chunk.url).pathname.split('/').filter(Boolean)[0]?.replace(/s$/, '') ?? '';
   const collectionBonus = terms.some((term) => firstPathSegment === term.replace(/s$/, '')) ? 0.15 : 0;
   return Math.min(1, coverage + phraseBonus + collectionBonus);
+}
+
+/**
+ * A long, non-generic topic such as "communion" should not be answered from a
+ * merely semantically similar page such as "community." Requiring literal
+ * evidence for these queries is safer than allowing a confident-looking but
+ * off-topic answer. Short or broad questions retain normal semantic retrieval.
+ */
+export function requiresDirectTopicEvidence(question: string): boolean {
+  return rawTokens(question)
+    .map(correctDomainToken)
+    .some((term) => term.length >= 7 && !GENERIC_SEARCH_WORDS.has(term) && !MONTHS.includes(term as typeof MONTHS[number]));
+}
+
+export function hasDirectTopicEvidence(question: string, chunks: MatchDocument[]): boolean {
+  if (!requiresDirectTopicEvidence(question)) return true;
+  return chunks.some((chunk) => calculateLexicalScore(question, chunk) > 0);
 }
 
 export function calculateTemporalEvidenceScore(question: string, chunk: MatchDocument): number {
@@ -309,9 +328,14 @@ export function fuseRetrievalCandidates(
     selected: selectedIds.has(candidate.id),
   }));
 
+  const topCandidate = selected[0];
+  const confidence = topCandidate && hasDirectTopicEvidence(question, selected)
+    ? topCandidate.retrievalConfidence ?? 0
+    : 0;
+
   return {
     chunks: selected,
-    confidence: selected[0]?.retrievalConfidence ?? 0,
+    confidence,
     diagnostics,
   };
 }

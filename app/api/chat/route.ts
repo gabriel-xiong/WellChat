@@ -4,8 +4,10 @@ import {
   calculateLexicalScore,
   fuseRetrievalCandidates,
   getDomainCorrections,
+  hasDirectTopicEvidence,
   MatchDocument,
   normalizeRetrievalQuery,
+  requiresDirectTopicEvidence,
   RetrievalDiagnostic,
   selectLexicalSearchTerms,
 } from '@/lib/retrieval';
@@ -457,6 +459,7 @@ function isSemanticCacheEligible(question: string): boolean {
   if (includesKeyword(question, CRISIS_KEYWORDS)) return false;
   if (includesKeyword(question, PASTORAL_KEYWORDS)) return false;
   if (includesKeyword(question, TIME_SENSITIVE_KEYWORDS)) return false;
+  if (requiresDirectTopicEvidence(question)) return false;
   if (/\b(i|i'm|i’ve|my|mine|me)\b/i.test(question)) return false;
   return question.length >= 8;
 }
@@ -990,7 +993,9 @@ export async function POST(request: Request) {
     }
 
     const chunks = retrievalResult.chunks;
-    const fallbackTriggered = chunks.length === 0 || retrievalResult.confidence < MIN_RETRIEVAL_CONFIDENCE;
+    const fallbackTriggered = chunks.length === 0
+      || retrievalResult.confidence < MIN_RETRIEVAL_CONFIDENCE
+      || !hasDirectTopicEvidence(question, chunks);
     const trace = traceFromChunks(chunks);
     const logQuery = async (answer: string, degraded = fallbackTriggered) => {
       const { error: logError } = await supabase.from('query_logs').insert({
