@@ -56,7 +56,10 @@ const BASE_EVAL_SET: EvalQuestion[] = [
 const REGRESSION_SET = JSON.parse(
   readFileSync(new URL('../evals/retrieval-regressions.json', import.meta.url), 'utf8')
 ) as Array<EvalQuestion & { source: string }>;
-const EVAL_SET: EvalQuestion[] = [...BASE_EVAL_SET, ...REGRESSION_SET];
+const COVERAGE_SET = JSON.parse(
+  readFileSync(new URL('../evals/retrieval-coverage.json', import.meta.url), 'utf8')
+) as EvalQuestion[];
+const EVAL_SET: EvalQuestion[] = [...BASE_EVAL_SET, ...REGRESSION_SET, ...COVERAGE_SET];
 
 function assertEnv(): void {
   if (!SUPABASE_URL) throw new Error('NEXT_PUBLIC_SUPABASE_URL is required.');
@@ -252,7 +255,7 @@ async function main(): Promise<void> {
 
   printSummary(comparisons);
   printFailures(comparisons);
-  const regressionFailures = comparisons.slice(BASE_EVAL_SET.length)
+  const regressionFailures = comparisons.slice(BASE_EVAL_SET.length, BASE_EVAL_SET.length + REGRESSION_SET.length)
     .filter((comparison) => !hitAt(comparison.hybrid, comparison.expectedSlugs, 5));
   if (regressionFailures.length) {
     throw new Error(`${regressionFailures.length} dashboard-derived retrieval regression(s) failed.`);

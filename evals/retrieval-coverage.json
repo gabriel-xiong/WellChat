@@ -1,0 +1,86 @@
+[
+  { "question": "What time does church start on Sunday?", "expectedSlugs": ["/sundays"] },
+  { "question": "Where do Sunday gatherings meet?", "expectedSlugs": ["/sundays"] },
+  { "question": "Is there parking available on Sundays?", "expectedSlugs": ["/sundays"] },
+  { "question": "What should a first-time visitor expect?", "expectedSlugs": ["/sundays"] },
+  { "question": "Can I attend worship this weekend?", "expectedSlugs": ["/sundays"] },
+
+  { "question": "How can I find a community group near me?", "expectedSlugs": ["/community"] },
+  { "question": "Where can I connect with people during the week?", "expectedSlugs": ["/community"] },
+  { "question": "Are small groups available?", "expectedSlugs": ["/community"] },
+  { "question": "Can newcomers join a community group?", "expectedSlugs": ["/community"] },
+  { "question": "What neighborhoods have community groups?", "expectedSlugs": ["/community"] },
+
+  { "question": "How do I volunteer at The Well?", "expectedSlugs": ["/serve"] },
+  { "question": "What teams can I serve on?", "expectedSlugs": ["/serve"] },
+  { "question": "I want to help on Sundays", "expectedSlugs": ["/serve"] },
+  { "question": "How can I get involved as a volunteer?", "expectedSlugs": ["/serve"] },
+  { "question": "Where do I sign up to serve?", "expectedSlugs": ["/serve"] },
+
+  { "question": "How can I give online?", "expectedSlugs": ["/giving"] },
+  { "question": "Can I donate to the church?", "expectedSlugs": ["/giving"] },
+  { "question": "Does The Well accept stock gifts?", "expectedSlugs": ["/giving"] },
+  { "question": "Where can I set up recurring giving?", "expectedSlugs": ["/giving"] },
+  { "question": "How do I make a financial contribution?", "expectedSlugs": ["/giving"] },
+
+  { "question": "What is available for children?", "expectedSlugs": ["/ministries"] },
+  { "question": "Do you have anything for students?", "expectedSlugs": ["/ministries"] },
+  { "question": "What ministries can my family join?", "expectedSlugs": ["/ministries"] },
+  { "question": "Tell me about kids ministry", "expectedSlugs": ["/ministries"] },
+  { "question": "Are there youth programs?", "expectedSlugs": ["/ministries"] },
+
+  { "question": "What are The Well's core beliefs?", "expectedSlugs": ["/beliefs"] },
+  { "question": "Where can I read your statement of faith?", "expectedSlugs": ["/beliefs"] },
+  { "question": "What does The Well teach about Jesus?", "expectedSlugs": ["/beliefs"] },
+  { "question": "What is your doctrine?", "expectedSlugs": ["/beliefs"] },
+  { "question": "What do you believe about the Bible?", "expectedSlugs": ["/beliefs"] },
+
+  { "question": "Who leads The Well?", "expectedSlugs": ["/team"] },
+  { "question": "How can I contact a pastor?", "expectedSlugs": ["/team"] },
+  { "question": "Where can I find staff information?", "expectedSlugs": ["/team"] },
+  { "question": "Who is on the leadership team?", "expectedSlugs": ["/team"] },
+  { "question": "How do I email the church office?", "expectedSlugs": ["/team"] },
+
+  { "question": "What is on the church calendar?", "expectedSlugs": ["/events"] },
+  { "question": "What events are coming up?", "expectedSlugs": ["/events"] },
+  { "question": "Is anything happening this week?", "expectedSlugs": ["/events"] },
+  { "question": "Show me upcoming gatherings", "expectedSlugs": ["/events"] },
+  { "question": "What is happening in November?", "expectedSlugs": ["/events", "/retreat"] },
+
+  { "question": "Where can I watch past sermons?", "expectedSlugs": ["/sermons"] },
+  { "question": "How do I listen to a sermon?", "expectedSlugs": ["/sermons"] },
+  { "question": "Is there a message archive?", "expectedSlugs": ["/sermons"] },
+  { "question": "Find a recent teaching", "expectedSlugs": ["/sermons"] },
+  { "question": "Can I browse sermon series?", "expectedSlugs": ["/sermons"] },
+
+  { "question": "Where can I hear the church podcast?", "expectedSlugs": ["/podcast"] },
+  { "question": "How do I listen to Well podcasts?", "expectedSlugs": ["/podcast"] },
+  { "question": "Are podcast episodes available?", "expectedSlugs": ["/podcast"] },
+  { "question": "What is the podcast called?", "expectedSlugs": ["/podcast"] },
+  { "question": "Can I subscribe to the podcast?", "expectedSlugs": ["/podcast"] },
+
+  { "question": "What is the vision of The Well?", "expectedSlugs": ["/mission"] },
+  { "question": "What is the church's purpose?", "expectedSlugs": ["/mission"] },
+  { "question": "What values guide The Well?", "expectedSlugs": ["/mission"] },
+  { "question": "How does The Well describe its mission?", "expectedSlugs": ["/mission"] },
+  { "question": "What does Exalt Disciple Send mean?", "expectedSlugs": ["/mission"] },
+
+  { "question": "How does The Well support global missions?", "expectedSlugs": ["/missions"] },
+  { "question": "Are there international mission trips?", "expectedSlugs": ["/missions"] },
+  { "question": "Where does the church serve internationally?", "expectedSlugs": ["/missions"] },
+  { "question": "Tell me about missionaries The Well supports", "expectedSlugs": ["/missions"] },
+  { "question": "How can I learn about global outreach?", "expectedSlugs": ["/missions"] },
+
+  { "question": "Are there open jobs at The Well?", "expectedSlugs": ["/jobs"] },
+  { "question": "How do I apply for a church role?", "expectedSlugs": ["/jobs"] },
+  { "question": "Is The Well hiring?", "expectedSlugs": ["/jobs"] },
+  { "question": "What employment opportunities are available?", "expectedSlugs": ["/jobs"] },
+  { "question": "Can I see current careers?", "expectedSlugs": ["/jobs"] },
+
+  { "question": "Where can I read church stories?", "expectedSlugs": ["/stories"] },
+  { "question": "Do you share member testimonies?", "expectedSlugs": ["/stories"] },
+  { "question": "What impact reports are available?", "expectedSlugs": ["/impact"] },
+  { "question": "Tell me about church planting", "expectedSlugs": ["/planting"] },
+  { "question": "What is the residency program?", "expectedSlugs": ["/residency"] },
+  { "question": "Where can I find practical resources?", "expectedSlugs": ["/resources"] }
+]
