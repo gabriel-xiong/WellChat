@@ -84,6 +84,9 @@ test('diagnostics explain rank inputs and final selection', () => {
 test('benchmark and production share the complete authoritative resource map', () => {
   assert.deepEqual(matchingApprovedResourceUrls('Who are the pastors or staff?'), ['https://thewellaustin.com/team']);
   assert.deepEqual(matchingApprovedResourceUrls('What is the mission of The Well?'), ['https://thewellaustin.com/mission']);
+  assert.deepEqual(matchingApprovedResourceUrls('Tell me about missionaries The Well supports'), ['https://thewellaustin.com/missions']);
+  assert.deepEqual(matchingApprovedResourceUrls('How do I make a financial contribution?'), ['https://thewellaustin.com/giving']);
+  assert.deepEqual(matchingApprovedResourceUrls('Is The Well hiring?'), ['https://thewellaustin.com/jobs']);
 });
 
 test('infers exact subject pages without confusing singular and plural collections', () => {

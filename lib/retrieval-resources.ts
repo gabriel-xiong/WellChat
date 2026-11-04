@@ -1,25 +1,29 @@
 import { selectLexicalSearchTerms } from './retrieval';
 
 export const APPROVED_RESOURCE_LINKS = [
-  { title: 'Sundays With Us', url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'worship', 'visit', 'location', 'parking'] },
+  { title: 'Sundays With Us', url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'services', 'worship', 'visit', 'attend', 'weekend', 'location', 'parking'] },
   { title: 'Community Groups', url: 'https://thewellaustin.com/community', keywords: ['community', 'group', 'connect'] },
   { title: 'Serve', url: 'https://thewellaustin.com/serve', keywords: ['serve', 'volunteer', 'team'] },
-  { title: 'Giving', url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate', 'stock', 'crypto'] },
+  { title: 'Giving', url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate', 'donation', 'financial', 'contribution', 'stock', 'crypto'] },
   { title: 'Ministries', url: 'https://thewellaustin.com/ministries', keywords: ['ministry', 'kids', 'children', 'youth'] },
   { title: 'What We Believe', url: 'https://thewellaustin.com/beliefs', keywords: ['believe', 'belief', 'scripture', 'doctrine', 'faith'] },
-  { title: 'Our Team', url: 'https://thewellaustin.com/team', keywords: ['team', 'staff', 'pastor', 'contact'] },
+  { title: 'Our Team', url: 'https://thewellaustin.com/team', keywords: ['team', 'staff', 'pastor', 'pastors', 'leader', 'leaders', 'leadership', 'contact', 'email', 'office'] },
   { title: 'Events', url: 'https://thewellaustin.com/events', keywords: ['event', 'happening', 'calendar', 'upcoming', 'this month', 'this week'] },
   { title: 'Sermons', url: 'https://thewellaustin.com/sermons', keywords: ['sermon', 'message', 'teaching'] },
   { title: 'Podcast', url: 'https://thewellaustin.com/podcast', keywords: ['podcast'] },
-  { title: 'Mission and Vision', url: 'https://thewellaustin.com/mission', keywords: ['mission', 'vision', 'values'] },
-  { title: 'International Missions', url: 'https://thewellaustin.com/missions', keywords: ['international', 'missions', 'trip'] },
-  { title: 'Jobs', url: 'https://thewellaustin.com/jobs', keywords: ['job', 'jobs', 'career', 'careers', 'employment'] },
+  { title: 'Mission and Vision', url: 'https://thewellaustin.com/mission', keywords: ['mission', 'vision', 'values', 'purpose'] },
+  { title: 'International Missions', url: 'https://thewellaustin.com/missions', keywords: ['international', 'missions', 'missionary', 'missionaries', 'global', 'outreach', 'trip', 'trips'] },
+  { title: 'Jobs', url: 'https://thewellaustin.com/jobs', keywords: ['job', 'jobs', 'career', 'careers', 'employment', 'hiring', 'apply', 'application', 'role', 'roles'] },
 ] as const;
 
+function matchesKeyword(question: string, keyword: string): boolean {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(question);
+}
+
 export function matchingApprovedResourceUrls(question: string): string[] {
-  const normalized = question.toLowerCase();
   return APPROVED_RESOURCE_LINKS
-    .filter((resource) => resource.keywords.some((keyword) => normalized.includes(keyword)))
+    .filter((resource) => resource.keywords.some((keyword) => matchesKeyword(question, keyword)))
     .map((resource) => resource.url);
 }
 
