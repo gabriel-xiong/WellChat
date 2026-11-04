@@ -140,6 +140,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  if (error instanceof Error) {
+    console.error(`Weekly monitoring report failed: ${error.name}: ${error.message}`);
+    if (error.stack) console.error(error.stack);
+  } else {
+    console.error('Weekly monitoring report failed:', JSON.stringify(error));
+  }
   process.exitCode = 1;
 });

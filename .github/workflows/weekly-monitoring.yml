@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.schedule.outputs.run_report == 'true'
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
