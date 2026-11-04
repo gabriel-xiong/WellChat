@@ -84,6 +84,7 @@ const EVENT_INTENT_PATTERN = /\b(events?|happening|calendar|upcoming)\b|\b(?:thi
 const TEMPORAL_QUESTION_PATTERN = /\b(?:when|what\s+time|date|dates|schedule|this\s+month|this\s+week|next\s+month|next\s+week)\b/i;
 const DATE_OR_TIME_PATTERN = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s*\d{1,2}\b|\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i;
 const RRF_K = 60;
+const AUTHORITATIVE_RRF_WEIGHT = 3;
 
 function rawTokens(text: string): string[] {
   return text
@@ -275,7 +276,7 @@ export function fuseRetrievalCandidates(
 
   vector.forEach((candidate, index) => add(candidate, 'vector', index + 1, 1));
   lexical.forEach((candidate, index) => add(candidate, 'lexical', index + 1, 1.1));
-  authoritative.forEach((candidate, index) => add(candidate, 'authoritative', index + 1, 1.25));
+  authoritative.forEach((candidate, index) => add(candidate, 'authoritative', index + 1, AUTHORITATIVE_RRF_WEIGHT));
 
   const ranked = [...merged.values()]
     .map((candidate) => ({

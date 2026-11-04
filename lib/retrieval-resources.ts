@@ -1,8 +1,8 @@
 import { selectLexicalSearchTerms } from './retrieval';
 
 export const APPROVED_RESOURCE_LINKS = [
-  { title: 'Sundays With Us', url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'services', 'worship', 'visit', 'attend', 'weekend', 'location', 'parking'] },
-  { title: 'Community Groups', url: 'https://thewellaustin.com/community', keywords: ['community', 'group', 'connect'] },
+  { title: 'Sundays With Us', url: 'https://thewellaustin.com/sundays', keywords: ['sunday', 'service', 'services', 'worship', 'visit', 'visitor', 'visitors', 'attend', 'weekend', 'location', 'parking'] },
+  { title: 'Community Groups', url: 'https://thewellaustin.com/community', keywords: ['community', 'group', 'groups', 'connect'] },
   { title: 'Serve', url: 'https://thewellaustin.com/serve', keywords: ['serve', 'volunteer', 'team'] },
   { title: 'Giving', url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate', 'donation', 'financial', 'contribution', 'stock', 'crypto'] },
   { title: 'Ministries', url: 'https://thewellaustin.com/ministries', keywords: ['ministry', 'kids', 'children', 'youth'] },

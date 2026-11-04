@@ -54,6 +54,13 @@ test('authoritative resources outrank secondary pages for direct intents', () =>
   assert.equal(result.chunks[0].id, 'retreat');
 });
 
+test('a directly matched official page outranks weak corroborated candidates', () => {
+  const official = chunk('team', { url: 'https://thewellaustin.com/team', title: 'Our Team', similarity: 0 });
+  const indirect = chunk('story', { title: 'Leadership Story', similarity: 0.45, content: 'A story about leaders.' });
+  const result = fuseRetrievalCandidates('Who leads The Well?', [indirect], [indirect], [official]);
+  assert.equal(result.chunks[0].id, 'team');
+});
+
 test('caps repeated chunks from one URL so one page cannot crowd out sources', () => {
   const repeated = Array.from({ length: 5 }, (_, index) => chunk(`same-${index}`, { url: 'https://thewellaustin.com/sundays', similarity: 0.6 - index * 0.01 }));
   const alternatives = [chunk('events', { similarity: 0.5 }), chunk('community', { similarity: 0.49 })];
@@ -87,6 +94,8 @@ test('benchmark and production share the complete authoritative resource map', (
   assert.deepEqual(matchingApprovedResourceUrls('Tell me about missionaries The Well supports'), ['https://thewellaustin.com/missions']);
   assert.deepEqual(matchingApprovedResourceUrls('How do I make a financial contribution?'), ['https://thewellaustin.com/giving']);
   assert.deepEqual(matchingApprovedResourceUrls('Is The Well hiring?'), ['https://thewellaustin.com/jobs']);
+  assert.deepEqual(matchingApprovedResourceUrls('What should a first-time visitor expect?'), ['https://thewellaustin.com/sundays']);
+  assert.deepEqual(matchingApprovedResourceUrls('Are there groups across Austin?'), ['https://thewellaustin.com/community']);
 });
 
 test('infers exact subject pages without confusing singular and plural collections', () => {
