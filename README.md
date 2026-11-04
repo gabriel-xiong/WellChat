@@ -2,7 +2,6 @@
 
 WellChat is a production retrieval-augmented assistant for [The Well Austin Community Church](https://thewellaustin.com/). It answers practical visitor questions from an approved content corpus, streams source-grounded responses, and routes sensitive requests to fixed human or emergency resources.
 
-The system is deployed inside an existing WordPress site, but the retrieval, generation, safety, caching, and telemetry layers run in a separate Next.js application.
 
 ## At a glance
 
