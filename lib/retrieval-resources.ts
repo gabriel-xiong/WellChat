@@ -7,12 +7,12 @@ export const APPROVED_RESOURCE_LINKS = [
   { title: 'Giving', url: 'https://thewellaustin.com/giving', keywords: ['give', 'giving', 'donate', 'donation', 'financial', 'contribution', 'stock', 'crypto'] },
   { title: 'Ministries', url: 'https://thewellaustin.com/ministries', keywords: ['ministry', 'kids', 'children', 'youth'] },
   { title: 'What We Believe', url: 'https://thewellaustin.com/beliefs', keywords: ['believe', 'belief', 'scripture', 'doctrine', 'faith'] },
-  { title: 'Our Team', url: 'https://thewellaustin.com/team', keywords: ['team', 'staff', 'pastor', 'pastors', 'leader', 'leaders', 'leadership', 'contact', 'email', 'office'] },
+  { title: 'Our Team', url: 'https://thewellaustin.com/team', keywords: ['team', 'staff', 'pastor', 'pastors', 'lead', 'leads', 'leader', 'leaders', 'leadership', 'contact', 'email', 'office'] },
   { title: 'Events', url: 'https://thewellaustin.com/events', keywords: ['event', 'happening', 'calendar', 'upcoming', 'this month', 'this week'] },
   { title: 'Sermons', url: 'https://thewellaustin.com/sermons', keywords: ['sermon', 'message', 'teaching'] },
   { title: 'Podcast', url: 'https://thewellaustin.com/podcast', keywords: ['podcast'] },
   { title: 'Mission and Vision', url: 'https://thewellaustin.com/mission', keywords: ['mission', 'vision', 'values', 'purpose'] },
-  { title: 'International Missions', url: 'https://thewellaustin.com/missions', keywords: ['international', 'missions', 'missionary', 'missionaries', 'global', 'outreach', 'trip', 'trips'] },
+  { title: 'International Missions', url: 'https://thewellaustin.com/missions', keywords: ['international', 'internationally', 'missions', 'missionary', 'missionaries', 'global', 'outreach', 'trip', 'trips'] },
   { title: 'Jobs', url: 'https://thewellaustin.com/jobs', keywords: ['job', 'jobs', 'career', 'careers', 'employment', 'hiring', 'apply', 'application', 'role', 'roles'] },
 ] as const;
 

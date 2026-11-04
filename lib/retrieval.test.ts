@@ -96,6 +96,8 @@ test('benchmark and production share the complete authoritative resource map', (
   assert.deepEqual(matchingApprovedResourceUrls('Is The Well hiring?'), ['https://thewellaustin.com/jobs']);
   assert.deepEqual(matchingApprovedResourceUrls('What should a first-time visitor expect?'), ['https://thewellaustin.com/sundays']);
   assert.deepEqual(matchingApprovedResourceUrls('Are there groups across Austin?'), ['https://thewellaustin.com/community']);
+  assert.deepEqual(matchingApprovedResourceUrls('Who leads The Well?'), ['https://thewellaustin.com/team']);
+  assert.deepEqual(matchingApprovedResourceUrls('Where does the church serve internationally?'), ['https://thewellaustin.com/serve', 'https://thewellaustin.com/missions']);
 });
 
 test('infers exact subject pages without confusing singular and plural collections', () => {
