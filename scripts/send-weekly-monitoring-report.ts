@@ -8,9 +8,6 @@ import {
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const EMAIL_TO = process.env.MONITORING_EMAIL_TO;
-const EMAIL_FROM = process.env.MONITORING_EMAIL_FROM;
 const LOOKBACK_DAYS = Math.max(1, Number(process.env.MONITORING_LOOKBACK_DAYS ?? '7'));
 const DRY_RUN = process.argv.includes('--dry-run') || process.env.MONITORING_REPORT_DRY_RUN === 'true';
 
@@ -88,23 +85,29 @@ async function readIngestionStatus(since: Date): Promise<IngestionStatus | null>
   }
 }
 
-async function sendEmail(subject: string, text: string, html: string): Promise<void> {
-  const response = await fetch('https://api.resend.com/emails', {
+async function createGitHubIssue(title: string, body: string): Promise<string> {
+  const token = required('GITHUB_TOKEN', process.env.GITHUB_TOKEN);
+  const repository = required('GITHUB_REPOSITORY', process.env.GITHUB_REPOSITORY);
+  const assignee = process.env.GITHUB_ACTOR;
+  const response = await fetch(`https://api.github.com/repos/${repository}/issues`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${required('RESEND_API_KEY', RESEND_API_KEY)}`,
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
+      'User-Agent': 'WellChat-monitoring',
+      'X-GitHub-Api-Version': '2022-11-28',
     },
     body: JSON.stringify({
-      from: required('MONITORING_EMAIL_FROM', EMAIL_FROM),
-      to: required('MONITORING_EMAIL_TO', EMAIL_TO).split(',').map((email) => email.trim()).filter(Boolean),
-      subject,
-      text,
-      html,
+      title,
+      body,
+      ...(assignee ? { assignees: [assignee] } : {}),
     }),
     signal: AbortSignal.timeout(20_000),
   });
-  if (!response.ok) throw new Error(`Resend email failed: ${response.status} ${await response.text()}`);
+  if (!response.ok) throw new Error(`GitHub Issue creation failed: ${response.status} ${await response.text()}`);
+  const issue = await response.json() as { html_url?: string };
+  return issue.html_url ?? 'GitHub Issue created.';
 }
 
 async function main(): Promise<void> {
@@ -132,8 +135,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  await sendEmail(report.subject, report.text, report.html);
-  console.log(`Sent weekly monitoring report to ${EMAIL_TO}.`);
+  const issueUrl = await createGitHubIssue(report.subject, report.text);
+  console.log(`Created weekly monitoring report: ${issueUrl}`);
 }
 
 main().catch((error) => {

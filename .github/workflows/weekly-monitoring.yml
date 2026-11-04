@@ -1,4 +1,4 @@
-name: Weekly monitoring email
+name: Weekly monitoring report
 
 on:
   schedule:
@@ -8,12 +8,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: weekly-monitoring-email
+  group: weekly-monitoring-report
   cancel-in-progress: false
 
 permissions:
   contents: read
   actions: read
+  issues: write
 
 jobs:
   report:
@@ -31,42 +32,23 @@ jobs:
             echo "run_report=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check email configuration
-        if: steps.schedule.outputs.run_report == 'true'
-        id: email
-        env:
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          MONITORING_EMAIL_TO: ${{ secrets.MONITORING_EMAIL_TO }}
-          MONITORING_EMAIL_FROM: ${{ secrets.MONITORING_EMAIL_FROM }}
-        shell: bash
-        run: |
-          if [[ -n "$RESEND_API_KEY" && -n "$MONITORING_EMAIL_TO" && -n "$MONITORING_EMAIL_FROM" ]]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Weekly monitoring email skipped. Configure RESEND_API_KEY, MONITORING_EMAIL_TO, and MONITORING_EMAIL_FROM repository secrets."
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+        if: steps.schedule.outputs.run_report == 'true'
 
       - uses: actions/setup-node@v4
-        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+        if: steps.schedule.outputs.run_report == 'true'
         with:
           node-version: 20
           cache: npm
 
       - name: Install dependencies
-        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+        if: steps.schedule.outputs.run_report == 'true'
         run: npm ci
 
-      - name: Generate and send weekly report
-        if: steps.schedule.outputs.run_report == 'true' && steps.email.outputs.configured == 'true'
+      - name: Generate weekly GitHub Issue
+        if: steps.schedule.outputs.run_report == 'true'
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          MONITORING_EMAIL_TO: ${{ secrets.MONITORING_EMAIL_TO }}
-          MONITORING_EMAIL_FROM: ${{ secrets.MONITORING_EMAIL_FROM }}
           GITHUB_TOKEN: ${{ github.token }}
         run: npx tsx scripts/send-weekly-monitoring-report.ts
