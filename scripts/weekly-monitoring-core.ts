@@ -42,6 +42,10 @@ export interface MonitoringReport {
 
 const SENSITIVE_CATEGORIES = new Set(['crisis', 'pastoral']);
 const CHICAGO_TIME_ZONE = 'America/Chicago';
+const MONTH_NAMES = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+];
 
 function escapeHtml(value: string): string {
   return value
@@ -125,6 +129,23 @@ function summarizeRepeatedQuestions(queries: MonitoringQuery[]): Array<[string, 
     .map(({ label, count }) => [label, count]);
 }
 
+function mentionedMonths(value: string): string[] {
+  const normalized = value.toLowerCase();
+  return MONTH_NAMES.filter((month) => new RegExp(`\\b${month}\\b`).test(normalized));
+}
+
+function potentialEventMonthMismatch(query: MonitoringQuery): string | null {
+  if (SENSITIVE_CATEGORIES.has(query.category ?? '') || query.fallback_triggered) return null;
+  const question = query.question ?? '';
+  const answer = query.answer ?? '';
+  if (!/\b(events?|happening|calendar)\b/i.test(question)) return null;
+  const requestedMonths = mentionedMonths(question);
+  if (!requestedMonths.length) return null;
+  const unexpected = mentionedMonths(answer).filter((month) => !requestedMonths.includes(month));
+  if (!unexpected.length) return null;
+  return `${displayedQuestion(query)} — answer also mentions ${unexpected.map((month) => month[0].toUpperCase() + month.slice(1)).join(', ')}`;
+}
+
 export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringReport {
   const { queries, events } = input;
   const fallbacks = queries.filter((query) => query.fallback_triggered);
@@ -138,6 +159,7 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
   const apiErrors = events.filter((event) => event.event_type === 'api_error').length;
   const categories = summarizeCategories(queries);
   const repeated = summarizeRepeatedQuestions(queries);
+  const potentialMonthMismatches = queries.map(potentialEventMonthMismatch).filter((item): item is string => Boolean(item));
   const newestDocumentAgeHours = input.newestDocumentAt
     ? (input.periodEnd.getTime() - new Date(input.newestDocumentAt).getTime()) / 3_600_000
     : null;
@@ -145,6 +167,7 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
   const alerts: string[] = [];
   if (queries.length && fallbacks.length / queries.length >= 0.1) alerts.push(`Fallback rate is ${percentage(fallbacks.length, queries.length)}.`);
   if (retrievalFallbacks.length) alerts.push(`${retrievalFallbacks.length} queries fell back because retrieval had no sources.`);
+  if (potentialMonthMismatches.length) alerts.push(`${potentialMonthMismatches.length} event answer(s) may include the wrong month and need review.`);
   if (apiErrors) alerts.push(`${apiErrors} API errors were recorded.`);
   if (input.ingestion?.conclusion && input.ingestion.conclusion !== 'success') alerts.push(`Latest ingestion concluded with ${input.ingestion.conclusion}.`);
   if ((input.ingestion?.failuresInWindow ?? 0) > 0) alerts.push(`${input.ingestion?.failuresInWindow} ingestion runs failed during the period.`);
@@ -157,6 +180,7 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
     ['Fallbacks', `${fallbacks.length} (${percentage(fallbacks.length, queries.length)})`],
     ['Retrieval fallbacks (no sources)', String(retrievalFallbacks.length)],
     ['Abstentions after retrieval', String(postRetrievalAbstentions.length)],
+    ['Potential event month mismatches', String(potentialMonthMismatches.length)],
     ['Cache hits', `${cacheHits} (${percentage(cacheHits, queries.length)})`],
     ['Average first token', formatMilliseconds(average(firstTokenTimes))],
     ['P95 total response', formatMilliseconds(percentile(totalTimes, 0.95))],
@@ -186,6 +210,9 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
     'Abstentions after retrieval — sources existed, but the answer was safely withheld:',
     ...(fallbackLines(postRetrievalAbstentions).length ? fallbackLines(postRetrievalAbstentions) : ['- None']),
     '',
+    'Potential answer-quality review — automated heuristics, not confirmed errors:',
+    ...(potentialMonthMismatches.length ? potentialMonthMismatches.slice(0, 20).map((item) => `- ${item}`) : ['- None']),
+    '',
     'Top categories:',
     ...(categories.length ? categories.map(([category, count]) => `- ${category}: ${count}`) : ['- None']),
     '',
@@ -200,7 +227,7 @@ export function buildWeeklyMonitoringReport(input: MonitoringInput): MonitoringR
   const alertHtml = alerts.length
     ? `<div style="background:#fff4e5;border:1px solid #f0c36d;border-radius:8px;padding:12px 16px"><strong>Needs attention</strong><ul>${alerts.map((alert) => `<li>${escapeHtml(alert)}</li>`).join('')}</ul></div>`
     : '<div style="background:#eaf8f4;border:1px solid #9bd8c8;border-radius:8px;padding:12px 16px"><strong>No alert thresholds were crossed.</strong></div>';
-  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#17332f;line-height:1.45"><div style="max-width:720px;margin:auto;padding:24px"><h1 style="font-size:24px;margin-bottom:4px">WellChat weekly monitoring</h1><p style="color:#52605d;margin-top:0">${escapeHtml(period)}</p>${alertHtml}<h2 style="font-size:18px;margin-top:24px">Metrics</h2><table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">${metricRows}</table><h2 style="font-size:18px;margin-top:24px">Retrieval fallbacks</h2><p style="color:#52605d">No sources were found. Sensitive pastoral and crisis query text is always redacted.</p><ol>${fallbackItems(retrievalFallbacks)}</ol><h2 style="font-size:18px;margin-top:24px">Abstentions after retrieval</h2><p style="color:#52605d">Sources existed, but the answer was safely withheld rather than inferred.</p><ol>${fallbackItems(postRetrievalAbstentions)}</ol><h2 style="font-size:18px;margin-top:24px">Top categories</h2><ul>${categories.map(([category, count]) => `<li>${escapeHtml(category)}: ${count}</li>`).join('') || '<li>None</li>'}</ul><h2 style="font-size:18px;margin-top:24px">Most repeated questions</h2><ul>${repeated.map(([question, count]) => `<li>${escapeHtml(question)}: ${count}</li>`).join('') || '<li>None</li>'}</ul>${input.ingestion?.url ? `<p><a href="${escapeHtml(input.ingestion.url)}">View latest ingestion run</a></p>` : ''}</div></body></html>`;
+  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#17332f;line-height:1.45"><div style="max-width:720px;margin:auto;padding:24px"><h1 style="font-size:24px;margin-bottom:4px">WellChat weekly monitoring</h1><p style="color:#52605d;margin-top:0">${escapeHtml(period)}</p>${alertHtml}<h2 style="font-size:18px;margin-top:24px">Metrics</h2><table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">${metricRows}</table><h2 style="font-size:18px;margin-top:24px">Retrieval fallbacks</h2><p style="color:#52605d">No sources were found. Sensitive pastoral and crisis query text is always redacted.</p><ol>${fallbackItems(retrievalFallbacks)}</ol><h2 style="font-size:18px;margin-top:24px">Abstentions after retrieval</h2><p style="color:#52605d">Sources existed, but the answer was safely withheld rather than inferred.</p><ol>${fallbackItems(postRetrievalAbstentions)}</ol><h2 style="font-size:18px;margin-top:24px">Potential answer-quality review</h2><p style="color:#52605d">Automated heuristics only; review before treating an item as an error.</p><ul>${potentialMonthMismatches.length ? potentialMonthMismatches.slice(0, 20).map((item) => `<li>${escapeHtml(item)}</li>`).join('') : '<li>None</li>'}</ul><h2 style="font-size:18px;margin-top:24px">Top categories</h2><ul>${categories.map(([category, count]) => `<li>${escapeHtml(category)}: ${count}</li>`).join('') || '<li>None</li>'}</ul><h2 style="font-size:18px;margin-top:24px">Most repeated questions</h2><ul>${repeated.map(([question, count]) => `<li>${escapeHtml(question)}: ${count}</li>`).join('') || '<li>None</li>'}</ul>${input.ingestion?.url ? `<p><a href="${escapeHtml(input.ingestion.url)}">View latest ingestion run</a></p>` : ''}</div></body></html>`;
 
   return { subject, text, html };
 }

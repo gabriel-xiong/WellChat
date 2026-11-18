@@ -60,6 +60,19 @@ test('separates retrieval failures from safe abstentions after retrieval', () =>
   assert.match(report.text, /Abstentions after retrieval — sources existed/);
 });
 
+test('flags event answers that mention months outside an explicitly requested month', () => {
+  const report = buildWeeklyMonitoringReport(input([
+    query({
+      question: 'What events are happening in November?',
+      category: 'events',
+      answer: 'An event is in November, followed by a December-only event.',
+    }),
+  ]));
+  assert.match(report.text, /Potential event month mismatches: 1/);
+  assert.match(report.text, /answer also mentions December/);
+  assert.match(report.html, /Potential answer-quality review/);
+});
+
 test('redacts sensitive query text from both email formats', () => {
   const secretText = 'I need someone to talk to about a private crisis';
   const report = buildWeeklyMonitoringReport(input([
