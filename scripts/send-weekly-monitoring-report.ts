@@ -85,19 +85,35 @@ async function readIngestionStatus(since: Date): Promise<IngestionStatus | null>
   }
 }
 
-async function createGitHubIssue(title: string, body: string): Promise<string> {
+function githubHeaders(token: string): HeadersInit {
+  return {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'WellChat-monitoring',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+}
+
+async function findExistingGitHubIssue(title: string, token: string, repository: string): Promise<string | null> {
+  const response = await fetch(`https://api.github.com/repos/${repository}/issues?state=all&per_page=100`, {
+    headers: githubHeaders(token),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`GitHub Issue lookup failed: ${response.status} ${await response.text()}`);
+  const issues = await response.json() as Array<{ title?: string; html_url?: string; pull_request?: unknown }>;
+  return issues.find((issue) => !issue.pull_request && issue.title === title)?.html_url ?? null;
+}
+
+async function createGitHubIssue(title: string, body: string): Promise<{ url: string; created: boolean }> {
   const token = required('GITHUB_TOKEN', process.env.GITHUB_TOKEN);
   const repository = required('GITHUB_REPOSITORY', process.env.GITHUB_REPOSITORY);
   const assignee = process.env.GITHUB_ACTOR;
+  const existing = await findExistingGitHubIssue(title, token, repository);
+  if (existing) return { url: existing, created: false };
   const response = await fetch(`https://api.github.com/repos/${repository}/issues`, {
     method: 'POST',
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'User-Agent': 'WellChat-monitoring',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
+    headers: githubHeaders(token),
     body: JSON.stringify({
       title,
       body,
@@ -107,7 +123,7 @@ async function createGitHubIssue(title: string, body: string): Promise<string> {
   });
   if (!response.ok) throw new Error(`GitHub Issue creation failed: ${response.status} ${await response.text()}`);
   const issue = await response.json() as { html_url?: string };
-  return issue.html_url ?? 'GitHub Issue created.';
+  return { url: issue.html_url ?? 'GitHub Issue created.', created: true };
 }
 
 async function main(): Promise<void> {
@@ -135,8 +151,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  const issueUrl = await createGitHubIssue(report.subject, report.text);
-  console.log(`Created weekly monitoring report: ${issueUrl}`);
+  const issue = await createGitHubIssue(report.subject, report.text);
+  console.log(`${issue.created ? 'Created' : 'Reused'} weekly monitoring report: ${issue.url}`);
 }
 
 main().catch((error) => {

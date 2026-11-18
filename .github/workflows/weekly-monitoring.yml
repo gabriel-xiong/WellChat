@@ -2,8 +2,8 @@ name: Weekly monitoring report
 
 on:
   schedule:
-    # GitHub cron is UTC. Running at both possible offsets lets the gate below
-    # select 8:00 AM America/Chicago across daylight-saving changes.
+    # GitHub cron is UTC. Both offsets cover 8:00 AM America/Chicago across
+    # daylight-saving changes. The report script deduplicates the two triggers.
     - cron: "0 13,14 * * 1"
   workflow_dispatch:
 
@@ -22,11 +22,13 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Check Austin schedule
+      - name: Check Austin weekday
         id: schedule
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$(TZ=America/Chicago date +%u-%H)" == "1-08" ]]; then
+          # Scheduled GitHub Actions can be delayed by hours. Accept any Monday
+          # run rather than silently skipping an otherwise valid weekly report.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$(TZ=America/Chicago date +%u)" == "1" ]]; then
             echo "run_report=true" >> "$GITHUB_OUTPUT"
           else
             echo "run_report=false" >> "$GITHUB_OUTPUT"
