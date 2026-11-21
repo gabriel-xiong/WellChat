@@ -14,7 +14,7 @@ import {
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 import { classifyQuestion } from '@/lib/chat-analytics';
 import { isGeneratedFallback } from '@/lib/chat-quality';
-import { getEventDateScope } from '@/lib/event-time';
+import { getEventDateScope, getEventDateWindow, hasDateInEventWindow } from '@/lib/event-time';
 import { APPROVED_RESOURCE_LINKS, isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from '@/lib/retrieval-resources';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
@@ -682,6 +682,16 @@ ${context}
 Answer using only the retrieved context. Include source URLs used in the answer.`;
 }
 
+function filterRelativeEventChunks(question: string, chunks: MatchDocument[]): MatchDocument[] {
+  const window = getEventDateWindow(question);
+  if (!window) return chunks;
+  return chunks.filter((chunk) => {
+    const path = new URL(chunk.url).pathname;
+    if (!path.startsWith('/events/')) return false;
+    return hasDateInEventWindow(`${chunk.title ?? ''}\n${chunk.section ?? ''}\n${chunk.content}`, window);
+  });
+}
+
 function cachedAnswerResponse(answer: string, queryId: string, logQuery: (answer: string) => Promise<void>): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -998,7 +1008,7 @@ export async function POST(request: Request) {
       return degradedResponse(question, queryId, 'retrieval_unavailable');
     }
 
-    const chunks = retrievalResult.chunks;
+    const chunks = filterRelativeEventChunks(question, retrievalResult.chunks);
     const fallbackTriggered = chunks.length === 0
       || retrievalResult.confidence < MIN_RETRIEVAL_CONFIDENCE
       || !hasDirectTopicEvidence(question, chunks);

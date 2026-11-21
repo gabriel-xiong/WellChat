@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getEventDateScope } from './event-time';
+import { getEventDateScope, getEventDateWindow, hasDateInEventWindow } from './event-time';
 
 const fridayInChicago = new Date('2026-11-20T18:00:00Z');
 
@@ -25,4 +25,11 @@ test('resolves relative event periods in the Austin timezone', () => {
 
 test('does not add a calendar scope to non-relative event questions', () => {
   assert.equal(getEventDateScope('What events are in November?', fridayInChicago), null);
+});
+
+test('matches only dates within a relative event window', () => {
+  const nextWeek = getEventDateWindow('What events are happening next week?', fridayInChicago);
+  assert.ok(nextWeek);
+  assert.equal(hasDateInEventWindow('A gathering is on Nov. 25 at 7pm.', nextWeek), true);
+  assert.equal(hasDateInEventWindow('A gathering is on Dec. 4 at 7pm.', nextWeek), false);
 });
