@@ -90,7 +90,8 @@ export function getEventDateScope(question: string, referenceDate = new Date()):
 /** True when text contains at least one month/day date within the requested window. */
 export function hasDateInEventWindow(text: string, window: EventDateWindow): boolean {
   const monthPattern = Object.keys(MONTH_NUMBERS).join('|');
-  const dates = text.matchAll(new RegExp(`\\b(${monthPattern})\\.?\\s*(\\d{1,2})\\b`, 'gi'));
+  // The events plugin renders dates as both "Nov. 20" and "Nov . 20".
+  const dates = text.matchAll(new RegExp(`\\b(${monthPattern})(?:\\s*\\.)?\\s*(\\d{1,2})\\b`, 'gi'));
   for (const match of dates) {
     const month = MONTH_NUMBERS[match[1].toLowerCase()];
     const day = Number(match[2]);

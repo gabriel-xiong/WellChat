@@ -31,5 +31,6 @@ test('matches only dates within a relative event window', () => {
   const nextWeek = getEventDateWindow('What events are happening next week?', fridayInChicago);
   assert.ok(nextWeek);
   assert.equal(hasDateInEventWindow('A gathering is on Nov. 25 at 7pm.', nextWeek), true);
+  assert.equal(hasDateInEventWindow('A gathering is on Nov . 25 at 7pm.', nextWeek), true);
   assert.equal(hasDateInEventWindow('A gathering is on Dec. 4 at 7pm.', nextWeek), false);
 });
