@@ -15,6 +15,7 @@ import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 import { classifyQuestion } from '@/lib/chat-analytics';
 import { isGeneratedFallback } from '@/lib/chat-quality';
 import { getEventDateScope, getEventDateWindow, hasDateInEventWindow } from '@/lib/event-time';
+import { buildInitialFallbackAnswer } from '@/lib/fallback-response';
 import { APPROVED_RESOURCE_LINKS, isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from '@/lib/retrieval-resources';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
@@ -68,6 +69,11 @@ available, say you don't know based on the available website
 information and suggest contacting The Well directly at
 ${ESCALATION_CONTACT}.
 
+If the question is plausibly about The Well but is undocumented, explain that
+you could not find published information on our website and do not guess. If
+the question is unrelated to The Well, briefly state that you can only help
+with information about The Well Austin Community Church.
+
 Always include a source link when answering.
 
 Speak in first person as The Well — use 'we', 'our', and 'us' rather than 'they' or 'their'.
@@ -98,7 +104,6 @@ Crisis Lifeline immediately.
 Do not invent service times, staff names, event details, or
 church policies.`;
 
-const FALLBACK_ANSWER = `I can't answer that based on what I know. Please contact us directly at ${ESCALATION_CONTACT}.`;
 const CRISIS_ANSWER = `If you are in crisis or having thoughts of harming yourself, please call 911 or the 988 Suicide and Crisis Lifeline (call or text 988) immediately. You can also reach out to our team at ${ESCALATION_CONTACT}.`;
 const PASTORAL_FALLBACK_ANSWER = `It sounds like you may be looking for personal support. We'd encourage you to reach out to our team directly — we'd love to connect you with someone who can help. Contact us at ${ESCALATION_CONTACT}.`;
 const CRISIS_KEYWORDS = [
@@ -785,7 +790,7 @@ async function streamAnswer(
         controller.close();
 
         try {
-          await completeAnswer(answer.trim() || FALLBACK_ANSWER, false);
+          await completeAnswer(answer.trim() || buildInitialFallbackAnswer(question, classifyQuestion(question), ESCALATION_CONTACT), false);
         } catch (error) {
           console.error('Failed to finalize streamed chat query:', error);
         }
@@ -1075,7 +1080,9 @@ export async function POST(request: Request) {
       }
     }
 
-    const answer = includesKeyword(question, PASTORAL_KEYWORDS) ? PASTORAL_FALLBACK_ANSWER : FALLBACK_ANSWER;
+    const answer = includesKeyword(question, PASTORAL_KEYWORDS)
+      ? PASTORAL_FALLBACK_ANSWER
+      : buildInitialFallbackAnswer(question, category, ESCALATION_CONTACT);
     const sources = extractMarkdownSources(answer);
 
     await Promise.allSettled([
