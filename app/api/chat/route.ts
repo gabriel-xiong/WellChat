@@ -14,6 +14,7 @@ import {
 import { getSuggestedAnswerCacheKey } from '@/lib/chat-suggestions';
 import { classifyQuestion } from '@/lib/chat-analytics';
 import { isGeneratedFallback } from '@/lib/chat-quality';
+import { getEventDateScope } from '@/lib/event-time';
 import { APPROVED_RESOURCE_LINKS, isInferredAuthoritativeUrl, matchingApprovedResourceUrls } from '@/lib/retrieval-resources';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
@@ -666,6 +667,7 @@ function buildUserMessage(question: string, chunks: MatchDocument[]): string {
     year: 'numeric',
     timeZone: 'America/Chicago',
   });
+  const eventDateScope = getEventDateScope(question);
 
   return `Today's date is ${currentDate}.
 
@@ -673,6 +675,7 @@ Question:
 ${question}
 
 ${corrections.length ? `Validated domain spelling interpretation: ${corrections.map((correction) => `"${correction.from}" means "${correction.to}"`).join(', ')}. Answer the interpreted question directly; do not treat the typo literally.\n` : ''}
+${eventDateScope ? `Calendar constraint: ${eventDateScope} Include only events that occur within this window. If none are in the retrieved context, say so; do not substitute later events.\n` : ''}
 Retrieved context:
 ${context}
 
