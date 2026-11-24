@@ -470,6 +470,9 @@ function isSemanticCacheEligible(question: string): boolean {
   if (includesKeyword(question, CRISIS_KEYWORDS)) return false;
   if (includesKeyword(question, PASTORAL_KEYWORDS)) return false;
   if (includesKeyword(question, TIME_SENSITIVE_KEYWORDS)) return false;
+  // Count and time questions are short factual lookups. A stale generated
+  // answer is worse than the small cost of retrieving their current evidence.
+  if (/\b(how many|how much|what time|which)\b/i.test(question)) return false;
   if (requiresDirectTopicEvidence(question)) return false;
   if (/\b(i|i'm|i’ve|my|mine|me)\b/i.test(question)) return false;
   return question.length >= 8;
