@@ -67,6 +67,8 @@ const SYNONYMS: Record<string, string[]> = {
   donation: ['giving'],
   donations: ['giving'],
   employment: ['jobs'],
+  gathering: ['sundays'],
+  gatherings: ['sundays'],
   job: ['jobs'],
   livestream: ['online', 'sundays'],
   livestreaming: ['online', 'sundays'],

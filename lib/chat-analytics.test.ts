@@ -5,6 +5,7 @@ import { classifyQuestion } from './chat-analytics';
 test('specific multiword intents beat broad overlapping keywords', () => {
   assert.equal(classifyQuestion('How do I visit a community group?'), 'community');
   assert.equal(classifyQuestion('Are there events after the Sunday service?'), 'sundays');
+  assert.equal(classifyQuestion('How many gatherings are there?'), 'sundays');
 });
 
 test('classifies job and career questions independently from staff', () => {

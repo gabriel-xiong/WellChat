@@ -19,7 +19,7 @@ const CATEGORY_KEYWORDS: Array<[ChatCategory, string[]]> = [
   ["crisis", ["harm myself", "harming myself", "hurt myself", "kill myself", "suicide", "suicidal", "end my life", "take my own life", "self-harm", "self harm", "hurting myself", "want to die", "don't want to live", "dont want to live"]],
   ["pastoral", ["pastoral care", "spiritual advice", "pray for me", "need prayer", "need to talk", "need someone to talk to", "talk to someone", "struggling", "counseling", "personal", "going through something"]],
   ["events", ["event", "happening", "calendar", "this month", "this week"]],
-  ["sundays", ["sunday", "service", "church start", "location", "visit"]],
+  ["sundays", ["sunday", "service", "gathering", "church start", "location", "visit"]],
   ["community", ["community group", "small group", "join a group"]],
   ["beliefs", ["believe", "belief", "doctrine", "theology"]],
   ["serving", ["serve", "volunteer"]],

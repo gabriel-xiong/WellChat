@@ -13,6 +13,7 @@ test('extracts subject terms and expands real typo/synonym failures', () => {
   assert.deepEqual(selectLexicalSearchTerms('What information do you have about the retreat?'), ['retreat']);
   assert.ok(selectLexicalSearchTerms('When is the reheat?').includes('retreat'));
   assert.ok(selectLexicalSearchTerms('Are there careers here?').includes('jobs'));
+  assert.ok(selectLexicalSearchTerms('How many gatherings are there?').includes('sundays'));
   assert.equal(normalizeRetrievalQuery('When is the reheat?'), 'retreat');
   assert.deepEqual(getDomainCorrections('When is the reheat?'), [{ from: 'reheat', to: 'retreat' }]);
   assert.deepEqual(getDomainCorrections('communion'), []);
@@ -105,6 +106,7 @@ test('benchmark and production share the complete authoritative resource map', (
   assert.deepEqual(matchingApprovedResourceUrls('How do I make a financial contribution?'), ['https://thewellaustin.com/giving']);
   assert.deepEqual(matchingApprovedResourceUrls('Is The Well hiring?'), ['https://thewellaustin.com/jobs']);
   assert.deepEqual(matchingApprovedResourceUrls('What should a first-time visitor expect?'), ['https://thewellaustin.com/sundays']);
+  assert.deepEqual(matchingApprovedResourceUrls('How many gatherings are there?'), ['https://thewellaustin.com/sundays']);
   assert.deepEqual(matchingApprovedResourceUrls('Are there groups across Austin?'), ['https://thewellaustin.com/community']);
   assert.deepEqual(matchingApprovedResourceUrls('Who leads The Well?'), ['https://thewellaustin.com/team']);
   assert.deepEqual(matchingApprovedResourceUrls('Where does the church serve internationally?'), ['https://thewellaustin.com/serve', 'https://thewellaustin.com/missions']);
